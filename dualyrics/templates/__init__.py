@@ -24,8 +24,11 @@ SCHEMA = "dualyrics.template/1"
 HERE = Path(__file__).resolve().parent
 BUILTIN_DIR = HERE / "builtin"
 SCHEMA_FILE = HERE / "schema.json"
-BUILTIN_IDS = ("cinema", "netflix", "karaoke", "minimal", "neon", "game_hud", "glass", "persian_classic")
-DEFAULT_ID = "cinema"
+BUILTIN_IDS = ("liquid_glass", "cinema", "netflix", "karaoke", "minimal", "neon", "game_hud", "glass",
+               "persian_classic")
+DEFAULT_ID = "cinema"            # base of validation: missing or bad values come from this preset
+INSTALL_DEFAULT_ID = "liquid_glass"   # the look of new installs and of users who never chose one (v2.1)
+OLD_DEFAULT_ID = "cinema"        # the default look of v2.0
 MIGRATED_ID = "my-style"
 LINE_KINDS = ("original", "translation", "next", "speaker")
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{1,39}$")

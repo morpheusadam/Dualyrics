@@ -224,11 +224,13 @@ Keyboard: Tab and Shift+Tab move through controls in visual order (mirrored in R
 | Key | English | Persian | Contains |
 |---|---|---|---|
 | `tab_general` | General | عمومی | UI language, theme (new), start with Windows, players |
+| `sec_sources` (v2.1) | Sources | منبع‌ها | Source order (up/down, on/off) globally or per profile, strict lyrics match, on-screen subtitle readers (UI Automation, OCR, subtitle-area picker, test), English pivot |
 | `tab_templates` (new) | Templates | قالب‌ها | Preset gallery and the template editor |
 | `tab_overlay` (new) | Overlay | پنجره‌ی متن | Position preset, monitor, lock, click-through, hide when idle, plain-lyrics height |
 | `tab_translation` | Translation | ترجمه | Provider, Gemini keys and models, style, target language |
 | `tab_sync` | Sync & hotkeys | همگام‌سازی و کلیدها | Offset, per-song offset, hotkeys |
 | `tab_network` | Network | شبکه | Proxy mode, custom proxy, connection test |
+| `sec_ai` (v2.1) | AI & API | هوش مصنوعی و API | Control API switch and status, regenerate / copy token, copy-ready MCP configuration for Claude Desktop, Claude Code and other clients, example requests (`docs/AI.md`) |
 | `tab_about` | About | درباره | Version, links, licences (including Vazirmatn OFL) |
 
 The current `tab_appearance` content moves into `tab_templates` (look) and `tab_overlay` (window behaviour). The English value of `tab_sync` changes to "Sync & hotkeys".

@@ -24,11 +24,13 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-SECTIONS = (("general", "general"), ("profiles", "profiles"), ("templates", "templates"), ("lyrics", "lyrics"),
-            ("live", "live"), ("translation", "translation"), ("monitors", "monitors"), ("sync", "sync"),
-            ("network", "network"), ("about", "about"))
+SECTIONS = (("general", "general"), ("profiles", "profiles"), ("sources", "mode"), ("templates", "templates"),
+            ("lyrics", "lyrics"), ("live", "live"), ("translation", "translation"), ("dubbing", "dubbing"),
+            ("usage", "usage"), ("monitors", "monitors"), ("sync", "sync"), ("network", "network"), ("ai", "ai"),
+            ("about", "about"))
 ALIASES = {"tab_general": "general", "tab_apps": "profiles", "tab_live": "live", "tab_translation": "translation",
-           "tab_appearance": "templates", "tab_sync": "sync", "tab_network": "network", "tab_about": "about"}
+           "tab_sources": "sources", "tab_appearance": "templates", "tab_sync": "sync", "tab_network": "network",
+           "tab_about": "about", "tab_dubbing": "dubbing", "tab_usage": "usage", "tab_ai": "ai"}
 
 
 def _init_theme(mode: str) -> None:
@@ -431,7 +433,11 @@ class SettingsWindow:
             self._layout_preview(self._logical_width())
             self._set_footer([(t("tpl_duplicate"), self._tpl_page.duplicate, "secondary")])
         else:
-            builder(content)
+            try:
+                builder(content)
+            except Exception as e:  # noqa: BLE001 - a broken page must not leave Settings blank (it is reopened on it)
+                log.exception("settings page %s failed", section)
+                k.note(k.group(content), t("sec_failed", err=f"{type(e).__name__}: {e}"[:300]), "danger")
         try:
             scroll._parent_canvas.yview_moveto(0)  # noqa: SLF001
         except Exception:
@@ -753,7 +759,30 @@ class SettingsWindow:
         k.button(top, t("close"), top.destroy, kind="primary").pack(pady=(0, 12))
         top.after(80, lambda: top.winfo_exists() and (top.lift(), top.focus_force()))
 
+    # -- Sources (see dualyrics/ui/sources_page.py)
+    def _build_sources(self, f: Any) -> None:
+        from dualyrics.ui import sources_page
+
+        sources_page.build(self, f)
+
     # -- Templates (see dualyrics/ui/template_page.py)
+    # -- Dubbing and Usage (v2.1; see dualyrics/ui/dubbing_page.py and usage_page.py)
+    def _build_dubbing(self, f: Any) -> None:
+        from dualyrics.ui import dubbing_page
+
+        dubbing_page.build(self, f)
+
+    def _build_usage(self, f: Any) -> None:
+        from dualyrics.ui import usage_page
+
+        usage_page.build(self, f)
+
+    # -- AI & API (v2.1; see dualyrics/ui/ai_page.py)
+    def _build_ai(self, f: Any) -> None:
+        from dualyrics.ui import ai_page
+
+        ai_page.build(self, f)
+
     def _build_templates(self, f: Any) -> None:  # pragma: no cover - built by select()
         pass
 
@@ -1213,13 +1242,19 @@ class SettingsWindow:
         k.label(txt, t("about_version", v=__version__), "body", T.TEXT_SECONDARY).pack(fill="x")
         k.label(g, t("about_text", v=__version__, path=str(paths.data_dir())), "body", wrap=560).pack(
             fill="x", pady=(T.SPACE[5], 0))
-        from dualyrics import REPO_URL
+        from dualyrics import ISSUES_URL, RELEASES_URL, REPO_URL
 
-        if REPO_URL:
-            link = k.label(g, REPO_URL, "body", T.ACCENT)
-            link.configure(cursor="hand2")
-            link.bind("<Button-1>", lambda _e: os.startfile(REPO_URL))
-            link.pack(fill="x", pady=(T.SPACE[3], 0))
+        link = k.label(g, REPO_URL, "body", T.ACCENT)
+        link.configure(cursor="hand2")
+        link.bind("<Button-1>", lambda _e: os.startfile(REPO_URL))
+        link.pack(fill="x", pady=(T.SPACE[3], 0))
+        g2 = k.group(f, t("about_github"), t("about_github_hint"))
+        acts = k.actions(g2)
+        k.button(acts, t("about_star"), lambda: os.startfile(REPO_URL), kind="primary", icon="star").pack(
+            side=k.start)
+        k.button(acts, t("about_repo"), lambda: os.startfile(REPO_URL)).pack(side=k.start, padx=8)
+        k.button(acts, t("about_issues"), lambda: os.startfile(ISSUES_URL)).pack(side=k.start)
+        k.button(acts, t("about_releases"), lambda: os.startfile(RELEASES_URL)).pack(side=k.start, padx=8)
         acts = k.actions(g)
         k.button(acts, t("open_data"), lambda: os.startfile(paths.data_dir()), icon="folder").pack(side=k.start)
         k.button(acts, t("open_log"), lambda: os.startfile(paths.log_dir() / "dualyrics.log")).pack(side=k.start,

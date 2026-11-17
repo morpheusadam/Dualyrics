@@ -18,7 +18,8 @@ from typing import Any, Callable, Protocol
 
 from PIL import Image, ImageTk
 
-from dualyrics import langs, render, templates, vdesk, winutil
+from dualyrics import backdrop as backdrop_mod, langs, render, templates, vdesk, winutil
+from dualyrics.backdrop import Backdrop
 from dualyrics.i18n import is_rtl, t
 from dualyrics.layered import LayeredSurface
 from dualyrics.settings import Settings
@@ -89,6 +90,8 @@ class Overlay:
         self.win.update_idletasks()
         self.hwnd = winutil.toplevel_hwnd(self.win)
         self.surface.attach(self.hwnd)
+        self.backdrop = Backdrop(root, self.hwnd)   # real blur under the box (frost mode "acrylic")
+        self._scale = 1.0                            # scale of the current frame (corner radius of the blur)
         self.visible = False
         self.overrides: dict[str, Any] = {}
         self.profile_id = ""                 # active app profile (positions are remembered per profile)
@@ -227,6 +230,7 @@ class Overlay:
             return
         mon = self.monitor()
         s, max_w = self._metrics(mon)
+        self._scale = s
         hit = not self.cfg["click_through"]
         if content.mode == "plain":
             if content.song != self._plain_song:
@@ -348,6 +352,25 @@ class Overlay:
             return
         if self.visible and not self.desktop_hidden:
             self.surface.blit(img, pos[0], pos[1], self._out_alpha())
+            if current:
+                self._sync_backdrop()
+
+    def _sync_backdrop(self) -> None:
+        """Real blur under the box when the template asks for it (Liquid Glass, Glass); else none."""
+        f = self._frame
+        if f is None or not self.visible or self.desktop_hidden or not backdrop_mod.wanted(self.template):
+            self.backdrop.hide()
+            return
+        c = self.template["container"]
+        rect = backdrop_mod.box_rect(self._pos, f.box)
+        self.backdrop.show(rect, int(round(c["corner_radius"] * self._scale)), c["background"]["color"])
+
+    def set_capture_excluded(self, excluded: bool) -> None:
+        """Leave the overlay (and its blur window) out of screen grabs while the screen source reads."""
+        from dualyrics.screen import capture
+
+        capture.set_capture_excluded(self.hwnd, excluded)
+        self.backdrop.set_capture_excluded(excluded)
 
     # -- line change animation (crossfade old -> new with optional slide)
     def _anim_step(self) -> None:
@@ -475,6 +498,7 @@ class Overlay:
             self.desktop_hidden = hidden
             if hidden:
                 self.win.withdraw()
+                self.backdrop.hide()
             elif self.visible:
                 self.win.deiconify()
                 self._blit(self._shown or self._current_image(), self._pos)
@@ -500,6 +524,7 @@ class Overlay:
 
     def hide(self) -> None:
         if self.visible and not (self._fade and self._fade["to"] == 0.0):
+            self.backdrop.hide()
             self._fade_to(0.0, self._motion()[3], then_hide=True)
 
     def _fade_to(self, target: float, ms: int, then_hide: bool = False) -> None:
@@ -528,6 +553,7 @@ class Overlay:
                 self.visible = False
                 self._stop_karaoke()
                 self.win.withdraw()
+                self.backdrop.hide()
             return
         self._fade_job = self.win.after(FRAME_MS, self._fade_step)
 
@@ -623,6 +649,7 @@ class Overlay:
             return
         mon = self.monitor()
         s = self.renderer.scale(self.template, mon.screen_height, mon.scale, scale)
+        self._scale = s
         hit = not self.cfg["click_through"]
         if c.mode == "plain":
             frame, _ = self.renderer.render_list(self.template, list(c.rows), c.status, s, w,
@@ -882,6 +909,7 @@ class Overlay:
         cmd(m, t("lv_resume") if paused else t("lv_pause"), "toggle_live_pause", "play" if paused else "pause",
             c.get("hotkey_live_pause", ""), bool(info.get("live_available")))
         cmd(m, t("m_save_transcript"), "save_transcript", "save", "", bool(info.get("live_has_text")))
+        check(m, t("dub_toggle"), bool(c.get("dub_enabled")), "toggle_dub", "dubbing", c.get("hotkey_dub", ""))
         m.add_separator()
         cmd(m, t("settings"), "settings", "settings")
         cmd(m, t("hide"), "toggle_visible", "eye_off", c.get("hotkey_toggle", ""))
@@ -942,6 +970,7 @@ class Overlay:
 
     def close(self) -> None:
         self._stop_karaoke()
+        self.backdrop.destroy()
         self.surface.close()
 
 

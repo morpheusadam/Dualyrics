@@ -39,11 +39,13 @@ class Tray:
             self._item("retranslate", "retranslate"),
             self._item("translation_only", "toggle_translation_only", checked="translation_only"),
             self._item("live_pause", "toggle_live_pause", checked="live_paused"),
+            self._item("dub_toggle", "toggle_dub", checked="dub_enabled"),
             pystray.Menu.SEPARATOR,
             self._item("click_through", "toggle_click_through", checked="click_through"),
             self._item("lock_position", "toggle_locked", checked="locked"),
             self._item("open_cache", "open_cache"),
             pystray.Menu.SEPARATOR,
+            self._item("tray_github", "open_github"),
             self._item("quit", "quit"),
         )
 

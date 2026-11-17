@@ -10,6 +10,10 @@ A profile is a plain dict (stored in settings.json under ``profiles``). Fields:
   ``target_language`` ('' = global), ``monitor`` ('' = global), ``position`` ('' = global or a preset),
   ``width`` (0 = global), ``click_through`` / ``translation_only`` (None = global), ``activation``
   (default / foreground / running).
+- sources (v2.1): ``sources_custom`` (False = the global order), ``source_order`` and ``sources_off`` (see
+  ``dualyrics.sources``), ``ocr_region`` ([] = the global subtitle region, else [x0, y0, x1, y1] fractions).
+- dubbing (v2.1): ``dub_custom`` (False = the global dubbing settings), ``dub_enabled``, ``dub_voice``,
+  ``dub_speed``, ``dub_volume``.
 
 Two special built-ins have no exe: ``fullscreen`` (any fullscreen app without its own profile, the Games
 preset) and ``default`` (everything else, off out of the box). ``media_any`` catches media sessions of
@@ -46,6 +50,16 @@ BEHAVIOUR: dict[str, Any] = {
     "click_through": None,
     "translation_only": None,
     "activation": "default",
+    "sources_custom": False,
+    "source_order": [],
+    "sources_off": [],
+    "ocr_region": [],
+    # v2.1 dubbing: with dub_custom the profile has its own on/off, voice, speed and volume
+    "dub_custom": False,
+    "dub_enabled": False,
+    "dub_voice": "auto",
+    "dub_speed": 1.0,
+    "dub_volume": 90,
 }
 
 # presets used when the user adds an app
@@ -136,6 +150,26 @@ def _validate_behaviour(raw: dict[str, Any], base: dict[str, Any], lang_codes: I
     out["translation_only"] = (_opt_bool(raw.get("translation_only")) if "translation_only" in raw
                                else base["translation_only"])
     out["activation"] = raw["activation"] if raw.get("activation") in ACTIVATIONS else base["activation"]
+    from dualyrics import sources as src_mod
+
+    out["sources_custom"] = raw["sources_custom"] if isinstance(raw.get("sources_custom"), bool) else bool(
+        base.get("sources_custom", False))
+    order = raw.get("source_order", base.get("source_order", []))
+    out["source_order"] = src_mod.validate_order(order) if order else []
+    out["sources_off"] = src_mod.validate_off(raw.get("sources_off", base.get("sources_off", [])))
+    out["ocr_region"] = src_mod.validate_region(raw.get("ocr_region", base.get("ocr_region", [])), ())
+    from dualyrics.dub import voices as voices_mod
+
+    for k in ("dub_custom", "dub_enabled"):
+        out[k] = raw[k] if isinstance(raw.get(k), bool) else bool(base.get(k, BEHAVIOUR[k]))
+    v = raw.get("dub_voice")
+    out["dub_voice"] = v if isinstance(v, str) and voices_mod.VOICE_RE.match(v) else base.get("dub_voice", "auto")
+    sp = raw.get("dub_speed")
+    out["dub_speed"] = round(max(0.5, min(2.0, float(sp))), 2) if isinstance(sp, (int, float)) and not isinstance(
+        sp, bool) and sp == sp else base.get("dub_speed", 1.0)
+    vol = raw.get("dub_volume")
+    out["dub_volume"] = int(max(0, min(100, round(vol)))) if isinstance(vol, (int, float)) and not isinstance(
+        vol, bool) and vol == vol else base.get("dub_volume", 90)
     return out
 
 
@@ -333,6 +367,9 @@ def overrides(p: dict[str, Any]) -> dict[str, Any]:
         o["translation_only"] = p["translation_only"]
     if p.get("template"):
         o["template"] = p["template"]
+    if p.get("dub_custom"):
+        o.update(dub_enabled=bool(p.get("dub_enabled")), dub_voice=p.get("dub_voice", "auto"),
+                 dub_speed=p.get("dub_speed", 1.0), dub_volume=p.get("dub_volume", 90))
     return o
 
 

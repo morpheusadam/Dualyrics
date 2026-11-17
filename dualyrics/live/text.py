@@ -52,7 +52,9 @@ class Recognition:
     avg_logprob: float = 0.0
     no_speech_prob: float = 0.0
     compression_ratio: float = 1.0
-    language: str = ""
+    language: str = ""           # spoken language (detected or set)
+    pivot: bool = False          # ``text`` is the English pivot of speech in ``language`` (Whisper translate)
+    alt: str = ""                # the original-language line, when it was written down too
 
 
 @dataclass
@@ -68,6 +70,8 @@ class Caption:
     version: int = 0             # bumps on every merge/update, so stale translations are ignored
     final: bool = False
     written: bool = False
+    pivot: bool = False          # ``text`` is English (pivot); ``alt`` holds the original-language line
+    alt: str = ""
 
 
 def normalize(text: str) -> str:
@@ -177,7 +181,9 @@ class CaptionStream:
                 return self._drop("duplicate")
             if ln and nn.startswith(ln) and not last.final:
                 # Whisper heard the same words again plus more: the longer version replaces the shorter one
-                return "update", self._replace(last, text, r, now)
+                cap = self._replace(last, text, r, now)
+                cap.alt = r.alt or cap.alt
+                return "update", cap
             trimmed = strip_overlap(last.text, text)
             if trimmed != text:
                 text = trimmed
@@ -187,10 +193,12 @@ class CaptionStream:
                 and r.start - last.end <= self.merge_gap
                 and r.end - last.start <= self.max_span
                 and len(last.text) + 1 + len(text) <= self.max_chars):
-            return "update", self._replace(last, f"{last.text} {text}", r, now)
+            cap = self._replace(last, f"{last.text} {text}", r, now)
+            cap.alt = f"{cap.alt} {r.alt}".strip() if r.alt else cap.alt
+            return "update", cap
         if last is not None:
             last.final = True
-        cap = Caption(self._next_id, text, r.start, r.end, now, language=r.language)
+        cap = Caption(self._next_id, text, r.start, r.end, now, language=r.language, pivot=r.pivot, alt=r.alt)
         self._next_id += 1
         self.captions.append(cap)
         return "new", cap
@@ -203,6 +211,7 @@ class CaptionStream:
         cap.translation, cap.trans_state = "", "pending"
         cap.version += 1
         cap.language = cap.language or r.language
+        cap.pivot = cap.pivot or r.pivot
         return cap
 
     def finalize_all(self) -> list[Caption]:
@@ -262,6 +271,7 @@ class LiveView:
     """What the overlay should show for Live mode right now."""
     original: str = ""
     translation: str = ""
+    extra: str = ""              # small third line (the English pivot under an original-language line)
     status: str = ""             # i18n key of a status message, or ''
     status_kw: dict = field(default_factory=dict)
     caption_id: int = 0

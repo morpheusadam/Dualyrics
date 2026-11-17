@@ -34,6 +34,35 @@ def make_session(proxy_mode: str, proxy_url: str = "") -> requests.Session:
     return s
 
 
+def proxy_of(session: requests.Session, scheme: str = "https") -> str:
+    """The proxy URL a session would use for ``scheme`` ('' = direct)."""
+    if session.trust_env:
+        import urllib.request
+
+        return urllib.request.getproxies().get(scheme, "") or ""
+    return (session.proxies or {}).get(scheme, "") or ""
+
+
+def ws_options(session: requests.Session) -> dict[str, object]:
+    """websocket-client keyword arguments that send a WebSocket through the same proxy as ``session``
+    (dubbing: Gemini Live and Edge speech)."""
+    from urllib.parse import unquote, urlsplit
+
+    url = proxy_of(session)
+    if not url:
+        return {}
+    u = urlsplit(url if "://" in url else f"http://{url}")
+    if not u.hostname:
+        return {}
+    kind = (u.scheme or "http").lower()
+    opts: dict[str, object] = {"http_proxy_host": u.hostname,
+                               "http_proxy_port": u.port or (1080 if kind.startswith("socks") else 8080),
+                               "proxy_type": kind if kind in ("socks4", "socks4a", "socks5", "socks5h") else "http"}
+    if u.username:
+        opts["http_proxy_auth"] = (unquote(u.username), unquote(u.password or ""))
+    return opts
+
+
 def is_network_error(exc: BaseException) -> bool:
     """Transient failure (connection, timeout, broken transfer, server overload): retry later, never cache."""
     if isinstance(exc, (requests.ConnectionError, requests.Timeout, requests.exceptions.ChunkedEncodingError)):

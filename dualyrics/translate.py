@@ -122,11 +122,34 @@ def _unique(lines: list[str]) -> tuple[list[str], list[int]]:
 
 
 # ---------------------------------------------------------------- Gemini
+_RETRY_DELAY = re.compile(r'"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"')
+NOTICE_EVERY = 60.0   # seconds between two "switched model/key" notices for the same pair
+
+
+def rate_limit_wait(msg: str, raw: str = "", now: float | None = None) -> float:
+    """How long a model x key stays skipped after HTTP 429: until the daily reset (midnight Pacific) when the
+    daily quota is used up, else the server's ``retryDelay``, else 90 s."""
+    text = f"{msg} {raw}".lower()
+    if "perday" in text.replace(" ", "").replace("_", "") or "per day" in text or "requests_per_day" in text:
+        from dualyrics import usage
+
+        return usage.quota_reset_in(time.time() if now is None else now)
+    m = _RETRY_DELAY.search(raw)
+    if m:
+        return max(5.0, min(3600.0, float(m.group(1)) + 1))
+    return 90.0
+
+
 class Gemini:
     def __init__(self, session_factory: Callable[[], requests.Session]) -> None:
         self.session_factory = session_factory
         self._cool: dict[tuple[str, str], float] = {}
         self._lock = threading.Lock()
+        # v2.1 usage meter (dualyrics/usage.py) and fallback notices, wired by the app
+        self.meter: Any = None
+        self.key_index: Callable[[str], int] = lambda key: 0
+        self.on_notice: Callable[[str, dict[str, Any]], None] | None = None
+        self._noticed: dict[tuple[str, str], float] = {}
 
     def _cooldown(self, model: str, key: str, seconds: float) -> None:
         with self._lock:
@@ -136,46 +159,114 @@ class Gemini:
         with self._lock:
             return self._cool.get((model, key), 0) > time.time()
 
+    def cooling(self, model: str, key: str) -> bool:
+        return self._cooling(model, key)
+
     def reset_cooldowns(self) -> None:
         with self._lock:
             self._cool.clear()
 
+    def notice(self, what: str, **kw: Any) -> None:
+        """Tell the user that a model, a key or the provider changed because of a limit (rate limited)."""
+        if self.on_notice is None:
+            return
+        mark = (what, str(sorted(kw.items())))
+        now = time.time()
+        with self._lock:
+            if now - self._noticed.get(mark, 0.0) < NOTICE_EVERY:
+                return
+            self._noticed[mark] = now
+        try:
+            self.on_notice(what, kw)
+        except Exception:
+            log.debug("notice callback failed", exc_info=True)
+
+    def _key_no(self, key: str) -> int:
+        try:
+            return int(self.key_index(key))
+        except Exception:
+            return 0
+
+    def record(self, model: str, key: str, kind: str, usage: Any, ok: bool, status: int,
+               audio_sec: float = 0.0) -> None:
+        if self.meter is None:
+            return
+        try:
+            self.meter.record(model, self._key_no(key), kind, usage, ok, status, audio_sec)
+        except Exception:
+            log.debug("usage record failed", exc_info=True)
+
+    def post(self, model: str, key: str, body: dict[str, Any], timeout: Any = net.TIMEOUT_SLOW,
+             kind: str = "text", audio_sec: Callable[[dict[str, Any]], float] | None = None,
+             ) -> tuple[dict[str, Any] | None, int, str, str]:
+        """One ``generateContent`` request, counted in the usage meter. Returns (json, status, message, raw
+        error body). Network errors are raised (and counted as failed requests)."""
+        try:
+            r = self.session_factory().post(GEMINI_URL.format(model=model), headers={"x-goog-api-key": key},
+                                            json=body, timeout=timeout)
+        except Exception:
+            self.record(model, key, kind, None, False, 0)
+            raise
+        if not r.ok:
+            raw = r.text[:4000]
+            try:
+                msg = r.json().get("error", {}).get("message", "")[:200]
+            except Exception:
+                msg = raw[:200]
+            self.record(model, key, kind, None, False, r.status_code)
+            return None, r.status_code, msg, raw
+        try:
+            data = r.json()
+        except ValueError:
+            self.record(model, key, kind, None, False, r.status_code)
+            raise
+        secs = 0.0
+        if audio_sec is not None:
+            try:
+                secs = float(audio_sec(data))
+            except Exception:
+                secs = 0.0
+        self.record(model, key, kind, data.get("usageMetadata"), True, r.status_code, secs)
+        return data, r.status_code, "", ""
+
     def call_once(self, model: str, key: str, prompt: str, timeout: Any = net.TIMEOUT_SLOW,
                   json_mode: bool = True) -> tuple[Any, int, str]:
         """One request. Returns (parsed_json_or_text, http_status, error_message)."""
+        data, status, msg, _raw = self._call(model, key, prompt, timeout, json_mode)
+        return data, status, msg
+
+    def _call(self, model: str, key: str, prompt: str, timeout: Any = net.TIMEOUT_SLOW,
+              json_mode: bool = True) -> tuple[Any, int, str, str]:
         body: dict[str, Any] = {"contents": [{"role": "user", "parts": [{"text": prompt}]}],
                                 "generationConfig": {"temperature": 0.4}}
         if json_mode:
             body["generationConfig"]["responseMimeType"] = "application/json"
-        r = self.session_factory().post(GEMINI_URL.format(model=model), headers={"x-goog-api-key": key},
-                                        json=body, timeout=timeout)
-        if not r.ok:
-            try:
-                msg = r.json().get("error", {}).get("message", "")[:200]
-            except Exception:
-                msg = r.text[:200]
-            return None, r.status_code, msg
-        cands = r.json().get("candidates") or []
+        j, status, msg, raw = self.post(model, key, body, timeout)
+        if j is None:
+            return None, status, msg, raw
+        cands = j.get("candidates") or []
         if not cands:
-            return None, 200, "empty answer (blocked?)"
+            return None, 200, "empty answer (blocked?)", ""
         parts = cands[0].get("content", {}).get("parts", [])
         text = "".join(p.get("text", "") for p in parts if not p.get("thought"))
         if not json_mode:
-            return text, 200, ""
+            return text, 200, "", ""
         text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip())
-        return json.loads(text), 200, ""
+        return json.loads(text), 200, "", ""
 
     def ask(self, keys: list[str], models: list[str], prompt: str, timeout: Any = net.TIMEOUT_SLOW) -> Any:
-        """Try every model x key (skipping ones cooling down after errors). Raises TranslationError."""
+        """Try every model x key (skipping ones cooling down after errors): when one is rate limited (429) the
+        next key, then the next model, is used, with a notice. Raises TranslationError."""
         if not keys:
             raise TranslationError("no Gemini API key")
         last = "all models are cooling down"
+        limited: tuple[str, str] | None = None     # the first model x key that answered 429 in this request
         for model in models:
             for key in keys:
                 if self._cooling(model, key):
                     continue
                 try:
-                    data, status, msg = self.call_once(model, key, prompt, timeout=timeout)
+                    data, status, msg, raw = self._call(model, key, prompt, timeout=timeout)
                 except json.JSONDecodeError as e:
                     self._cooldown(model, key, 20)
                     last = f"{model}: bad JSON ({e})"
@@ -188,13 +279,21 @@ class Gemini:
                         raise TranslationError(f"network error: {e}") from e
                     continue
                 if status == 200 and data is not None:
+                    if limited is not None:
+                        self.notice("fallback_model", frm=limited[0], to=model, key=self._key_no(key))
                     return data
-                wait = {400: 3600, 401: 86400, 403: 86400, 404: 86400, 429: 90}.get(status, 30)
-                if status == 400 and "api key" not in msg.lower():
+                wait = {400: 3600, 401: 86400, 403: 86400, 404: 86400}.get(status, 30)
+                if status == 429:
+                    wait = rate_limit_wait(msg, raw)
+                    if limited is None:
+                        limited = (model, key)
+                elif status == 400 and "api key" not in msg.lower():
                     wait = 120  # bad request for this model, not a bad key
                 self._cooldown(model, key, wait)
                 last = f"{model}: HTTP {status} {msg}"
                 log.info("gemini %s -> %s %s", model, status, msg)
+        if limited is not None:
+            last = f"rate limited: {last}"
         raise TranslationError(last)
 
 

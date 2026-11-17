@@ -63,12 +63,16 @@ class Transcriber:
         raise RuntimeError("; ".join(errors) or "no device")
 
     def transcribe(self, audio16k: Any, start: float, end: float, language: str | None = None,
-                   prompt: str = "") -> list[Recognition]:
-        """One audio segment -> recognitions (usually one; Whisper may split long speech)."""
+                   prompt: str = "", task: str = "transcribe") -> list[Recognition]:
+        """One audio segment -> recognitions (usually one; Whisper may split long speech).
+
+        ``task="translate"`` (multilingual models) writes English for speech in any language; the detected
+        spoken language is still reported in ``Recognition.language``."""
         if self.model is None:
             raise RuntimeError("model not loaded")
         segs, info = self.model.transcribe(
-            audio16k, language=language or None, beam_size=1 if self.device == "cpu" else 3,
+            audio16k, language=language or None, task=task if task in ("transcribe", "translate") else "transcribe",
+            beam_size=1 if self.device == "cpu" else 3,
             vad_filter=False, condition_on_previous_text=False, without_timestamps=True,
             initial_prompt=prompt[-200:] or None, temperature=0.0)
         lang = getattr(info, "language", "") or (language or "")

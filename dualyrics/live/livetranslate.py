@@ -8,6 +8,7 @@ as the fallback (or as the provider when the user chose it). Repeated lines come
 from __future__ import annotations
 
 import logging
+import threading
 from collections import OrderedDict
 from typing import Any
 
@@ -47,17 +48,57 @@ def build_live_prompt(text: str, context: list[tuple[str, str]], target: str, so
     return "\n".join(lines)
 
 
+def build_english_prompt(text: str) -> str:
+    return "\n".join([
+        "Translate this on-screen subtitle line into natural English and name its language.",
+        'Return JSON: {"language": "<ISO 639-1 code of the original>", "english": "<the line in English>"}',
+        f"Line:\n{text}",
+    ])
+
+
 class LiveTranslator:
     def __init__(self, translator: Any) -> None:
         """``translator`` is the app's ``dualyrics.translate.Translator`` (its Gemini and free clients)."""
         self.translator = translator
         self._cache: OrderedDict[tuple[str, str], str] = OrderedDict()
+        self._english: OrderedDict[str, tuple[str, str]] = OrderedDict()   # pivot: (English, language)
+        self._lock = threading.Lock()   # Live mode and the screen source translate on several threads
 
     def _remember(self, key: tuple[str, str], value: str) -> None:
-        self._cache[key] = value
-        self._cache.move_to_end(key)
-        while len(self._cache) > CACHE_SIZE:
-            self._cache.popitem(last=False)
+        with self._lock:
+            self._cache[key] = value
+            self._cache.move_to_end(key)
+            while len(self._cache) > CACHE_SIZE:
+                self._cache.popitem(last=False)
+
+    def to_english(self, text: str, cfg: dict[str, Any]) -> tuple[str, str]:
+        """(English line, detected language) for the English pivot of on-screen text. Free Google when it is
+        the provider or the allowed fallback, else Gemini. Raises TranslationError."""
+        key = normalize(text)
+        with self._lock:
+            if key in self._english:
+                self._english.move_to_end(key)
+                return self._english[key]
+        gemini = cfg["provider"] == "gemini" and bool(cfg["gemini_keys"])
+        english, detected = "", ""
+        if gemini and not cfg["fallback_free"]:
+            data = self.translator.gemini.ask(cfg["gemini_keys"], cfg["gemini_models"],
+                                              build_english_prompt(text), timeout=net.TIMEOUT_FAST)
+            if isinstance(data, dict):
+                english = str(data.get("english") or "").strip()
+                detected = str(data.get("language") or "").strip().lower()[:8]
+        else:
+            try:
+                lines, detected = self.translator.free.translate([text], "en")
+                english = (lines[0] if lines else "").strip()
+            except Exception as e:
+                raise TranslationError(f"free translate: {e}") from e
+        if english:
+            with self._lock:
+                self._english[key] = (english, detected or "")
+                while len(self._english) > CACHE_SIZE:
+                    self._english.popitem(last=False)
+        return english, detected or ""
 
     def translate(self, text: str, cfg: dict[str, Any], context: list[tuple[str, str]], source: str = "",
                   where: str = "", title: str = "") -> tuple[str, str]:
@@ -69,10 +110,17 @@ class LiveTranslator:
         if guess and cfg.get("skip_same_language", True) and langs.same_language(guess, target):
             return "", "skipped"
         key = (normalize(text), target)
-        if key in self._cache:
-            self._cache.move_to_end(key)
-            return self._cache[key], "done"
+        with self._lock:
+            hit = self._cache.get(key)
+            if hit is not None:
+                self._cache.move_to_end(key)
+        if hit is not None:
+            meter = getattr(getattr(self.translator, "gemini", None), "meter", None)
+            if meter is not None and cfg["provider"] == "gemini" and cfg["gemini_keys"]:
+                meter.cache_hit()          # a Gemini request saved
+            return hit, "done"
         out = ""
+        gemini_failed = False
         if cfg["provider"] == "gemini" and cfg["gemini_keys"]:
             prompt = build_live_prompt(text, context, target, source, where, title)
             try:
@@ -84,12 +132,17 @@ class LiveTranslator:
                 log.info("live gemini failed: %s", e)
                 if not cfg["fallback_free"]:
                     raise
+                gemini_failed = True
         if not out:
             try:
                 lines, _det = self.translator.free.translate([text], target)
                 out = (lines[0] if lines else "").strip()
             except Exception as e:
                 raise TranslationError(f"free translate: {e}") from e
+            if gemini_failed and out:
+                notice = getattr(getattr(self.translator, "gemini", None), "notice", None)
+                if callable(notice):
+                    notice("fallback_free")
         if out:
             self._remember(key, out)
         return out, "done"

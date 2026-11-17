@@ -74,7 +74,7 @@ def concept_a():
 def concept_b():
     img, _ = base((8, 47, 73), (15, 23, 42), 160)
     d = ImageDraw.Draw(img)
-    cx, cy = 560, 1024
+    cy = 1024
     heights = [260, 520, 820, 520, 300]
     def wave(dr, col, o=(0, 0)):
         for i, hgt in enumerate(heights):
@@ -85,9 +85,7 @@ def concept_b():
         dr.rounded_rectangle([1040 + o[0], 1110 + o[1], 1560 + o[0], 1250 + o[1]], 70, fill=col2)
     shadow(img, lambda dr, c, o: (wave(dr, c, o), lines(dr, c, c, o)))
     wave(d, (34, 211, 238)); lines(d, (255, 255, 255), (251, 113, 133))
-    for k in range(3):                                  # flow dots between wave and text
-        x = 950 + 0 * k
-    d.ellipse([930, 990, 990, 1050], fill=(34, 211, 238))
+    d.ellipse([930, 990, 990, 1050], fill=(34, 211, 238))   # a flow dot between wave and text
     return img
 
 

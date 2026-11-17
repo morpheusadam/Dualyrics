@@ -1,0 +1,41 @@
+name: Translation request
+description: Ask for (or offer) the Dualyrics interface in your language, or report a bad translation.
+labels: ["translation"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The interface is in English and Persian today. Translations of lyrics and captions already work into 46 languages; this form is about the app's own buttons and messages, and about translation quality problems.
+        Interface strings live in `dualyrics/i18n.py`, `i18n_v2.py`, `i18n_v21.py`, `i18n_dub.py` and `i18n_ai.py`, one entry per key with an `en` and a `fa` value.
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What is this about?
+      options:
+        - A new interface language
+        - A wrong or awkward interface string (English or Persian)
+        - A poor translation of lyrics or captions
+    validations:
+      required: true
+  - type: input
+    id: language
+    attributes:
+      label: Language
+      placeholder: "Turkish (tr)"
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Details
+      description: For a wrong string, quote it and suggest the fix. For a poor lyrics or caption translation, give the original line, what Dualyrics showed, and whether you use Gemini or the free translator.
+    validations:
+      required: true
+  - type: dropdown
+    id: help
+    attributes:
+      label: Can you translate it yourself?
+      options:
+        - "Yes, I can translate the strings and open a pull request"
+        - "I can review a translation someone else makes"
+        - "No"

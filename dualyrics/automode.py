@@ -12,16 +12,21 @@ from dataclasses import dataclass
 
 MODES = ("auto", "lyrics", "live", "off")    # user-facing choices (global setting and per-app profiles)
 LYRICS, LIVE, HIDE = "lyrics", "live", "hide"  # what the overlay does right now
+SCREEN = "screen"                              # ... or: the subtitles the app itself shows (UIA / OCR)
+
+# sources, in the order the user gave them (see dualyrics/sources.py)
+SRC_LYRICS, SRC_SCREEN, SRC_AUDIO = "lyrics", "screen", "audio"
+ALL_SOURCES = (SRC_LYRICS, SRC_SCREEN, SRC_AUDIO)
 
 # lyrics lookup states as seen by the decision
 LYR_NONE = "none"               # nothing looked up yet (no track)
 LYR_SEARCHING = "searching"
-LYR_FOUND = "found"             # synced or plain lyrics, or an instrumental marker
+LYR_FOUND = "found"             # synced or plain lyrics, or an instrumental marker (strictly matched in browsers)
 LYR_NOT_FOUND = "not_found"
 LYR_NETWORK = "network"         # lookup failed on the network; retried later
 
 # seconds a new decision must stay stable before the overlay switches to it
-HOLD = {LYRICS: 0.4, LIVE: 1.5, HIDE: 2.0}
+HOLD = {LYRICS: 0.4, SCREEN: 0.4, LIVE: 1.5, HIDE: 2.0}
 
 
 @dataclass(frozen=True)
@@ -34,48 +39,77 @@ class Inputs:
     live_ready: bool = False           # Live mode is installed and switched on
     live_when_no_lyrics: bool = True   # allowed to transcribe a song or video that has no lyrics
     live_context: bool = False         # foreground is a game, a fullscreen app or a video player (profile kind)
+    sources: tuple[str, ...] = ALL_SOURCES   # enabled sources in priority order
+    screen_ready: bool = False         # the window in front may be read for subtitles (UIA or OCR works)
+    screen_text: bool = False          # ... and it shows subtitles right now (or did a moment ago)
+    browser_video: bool = False        # the playing media session is a web browser (a video, most of the time)
 
 
 @dataclass(frozen=True)
 class Decision:
-    mode: str      # LYRICS | LIVE | HIDE
+    mode: str      # LYRICS | SCREEN | LIVE | HIDE
     reason: str    # short machine-readable reason, logged and shown in the settings window
+    probe_screen: bool = False   # the screen reader should run (it is the next source to try)
+
+
+def _lyrics_wait_reason(state: str) -> str:
+    return {LYR_NETWORK: "network", LYR_NOT_FOUND: "no_lyrics"}.get(state, "searching")
 
 
 def decide(i: Inputs) -> Decision:
-    """The Smart Auto rule table (first matching rule wins)."""
+    """Smart source priority (docs/ALGORITHM.md, section 2): walk the enabled sources in the user's order
+    and take the first one that has something to show."""
     media = i.media_playing or i.media_recent
     if not i.profile_enabled or i.mode == "off":
         return Decision(HIDE, "profile_off")
     if i.mode == "lyrics":
         return Decision(LYRICS, "forced_lyrics") if media else Decision(HIDE, "idle")
-    if i.mode == "live":
-        if i.live_ready:
-            return Decision(LIVE, "forced_live")
-        return Decision(LYRICS, "live_unavailable") if media else Decision(HIDE, "live_unavailable")
-
-    # ---- auto
+    forced_live = i.mode == "live"
+    order = [s for s in i.sources if s in ALL_SOURCES]
+    if forced_live:   # "Live" = captions: what the screen shows, else what is heard
+        order = [s for s in order if s != SRC_LYRICS] or [SRC_AUDIO]
+    context = i.live_context or i.browser_video     # games, films and browser videos do not wait for lyrics
+    lyrics_settled = SRC_LYRICS not in order or i.lyrics == LYR_NOT_FOUND
+    # the user put audio before lyrics: captions of what is heard even for songs that have lyrics
+    audio_first = SRC_AUDIO in order and SRC_LYRICS in order and order.index(SRC_AUDIO) < order.index(SRC_LYRICS)
+    probe = False
+    for src in order:
+        if src == SRC_LYRICS:
+            if not i.media_playing:
+                continue
+            if i.lyrics == LYR_FOUND:
+                return Decision(LYRICS, "lyrics_found")
+            if i.lyrics != LYR_NOT_FOUND and not context:
+                # music waits for the lookup (or shows its network error); the next sources come after
+                return Decision(LYRICS, _lyrics_wait_reason(i.lyrics))
+        elif src == SRC_SCREEN:
+            if i.screen_ready and (context or forced_live or i.media_playing):
+                if i.screen_text:
+                    return Decision(SCREEN, "screen_text", True)
+                probe = True
+        elif src == SRC_AUDIO and i.live_ready:
+            if forced_live:
+                return Decision(LIVE, "forced_live", probe)
+            if context:
+                return Decision(LIVE, "live_context", probe)
+            if i.media_playing and audio_first:
+                return Decision(LIVE, "audio_first", probe)
+            if i.media_playing and i.live_when_no_lyrics and lyrics_settled:
+                return Decision(LIVE, "no_lyrics", probe)
+    # no source has anything to show
+    if forced_live:
+        if not i.live_ready and SRC_AUDIO in order:
+            return Decision(LYRICS, "live_unavailable", probe) if media else Decision(HIDE, "live_unavailable", probe)
+        return Decision(HIDE, "no_subtitles", probe)
     if i.media_playing:
-        if i.lyrics == LYR_FOUND:
-            return Decision(LYRICS, "lyrics_found")
-        if i.lyrics in (LYR_NONE, LYR_SEARCHING):
-            # a game or film keeps its captions while a lookup runs; music waits for the result
-            if i.live_context and i.live_ready:
-                return Decision(LIVE, "live_context")
-            return Decision(LYRICS, "searching")
-        if i.lyrics == LYR_NETWORK:
-            if i.live_context and i.live_ready:
-                return Decision(LIVE, "live_context")
-            return Decision(LYRICS, "network")
-        # not found
-        if i.live_ready and (i.live_when_no_lyrics or i.live_context):
-            return Decision(LIVE, "no_lyrics")
-        return Decision(LYRICS, "no_lyrics")
+        if SRC_LYRICS in order:
+            return Decision(LYRICS, _lyrics_wait_reason(i.lyrics), probe)
+        return Decision(HIDE, "no_source", probe)
     if i.live_context:
-        return Decision(LIVE, "live_context") if i.live_ready else Decision(HIDE, "live_unavailable")
-    if i.media_recent:
+        return Decision(HIDE, "live_unavailable" if not i.live_ready else "no_subtitles", probe)
+    if i.media_recent and SRC_LYRICS in order:
         return Decision(LYRICS, "paused")
-    return Decision(HIDE, "idle")
+    return Decision(HIDE, "idle", probe)
 
 
 class AutoSwitch:

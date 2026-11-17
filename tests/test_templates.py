@@ -102,7 +102,7 @@ def test_sanitize_garbage_gives_cinema():
 
 def test_store_fork_rename_delete_restore_reset(tmp_path):
     store = T.TemplateStore(tmp_path)
-    assert store.ids()[:8] == list(T.BUILTIN_IDS)
+    assert store.ids()[:len(T.BUILTIN_IDS)] == list(T.BUILTIN_IDS)
     assert store.resolve("does-not-exist")["id"] == "cinema"
     copy_ = store.fork("karaoke", names={"en": "Karaoke", "fa": "کارائوکه"})
     assert copy_["id"] != "karaoke" and copy_["based_on"] == "karaoke" and not copy_["builtin"]
@@ -207,7 +207,7 @@ def test_v1_settings_become_my_style():
 def test_settings_template_and_overlay_keys():
     v = S.validate({"template": "My Look!", "overlay_scale": 9, "overlay_opacity": 0.05, "monitors_off": "a, b",
                     "virtual_desktops": "everywhere", "ui_theme": "neon"})
-    assert v["template"] == "cinema" and v["overlay_scale"] == 2.0 and v["overlay_opacity"] == 0.2
+    assert v["template"] == "liquid_glass" and v["overlay_scale"] == 2.0 and v["overlay_opacity"] == 0.2
     assert v["monitors_off"] == ["a", "b"] and v["virtual_desktops"] == "all" and v["ui_theme"] == "dark"
     assert S.validate({"template": "my-look_2"})["template"] == "my-look_2"
     pos = S.validate({"positions": {"m": {"w": 50, "scale": 7}, "p@m": {"x": 5, "y": 6, "anchor": "top",

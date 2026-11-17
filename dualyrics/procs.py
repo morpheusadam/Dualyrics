@@ -104,6 +104,7 @@ class AppInfo:
     path: str          # full path ('' when Windows did not tell)
     title: str = ""    # window title
     pid: int = 0
+    hwnd: int = 0      # the window, when it was picked by a click
 
     @property
     def ref(self) -> AppRef:
@@ -275,10 +276,10 @@ def file_description(path: str) -> str:
     return ""
 
 
-def app_from_path(path: str, title: str = "", pid: int = 0) -> AppInfo:
+def app_from_path(path: str, title: str = "", pid: int = 0, hwnd: int = 0) -> AppInfo:
     exe = ntpath.basename(path).lower()
     name = file_description(path) or title or ntpath.splitext(ntpath.basename(path))[0]
-    return AppInfo(name[:80], exe, path, title, pid)
+    return AppInfo(name[:80], exe, path, title, pid, hwnd)
 
 
 def running_apps() -> list[AppInfo]:
@@ -417,6 +418,6 @@ def pick_window(timeout: float = 20.0, cancelled: Callable[[], bool] = lambda: F
                 child = _uwp_child_pid(hwnd, pid)
                 if child:
                     pid, path = child, process_path(child)
-            return app_from_path(path, _title(hwnd), pid) if path else None
+            return app_from_path(path, _title(hwnd), pid, int(hwnd)) if path else None
         time.sleep(0.02)
     return None

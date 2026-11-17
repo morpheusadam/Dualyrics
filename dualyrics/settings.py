@@ -16,11 +16,13 @@ import threading
 from pathlib import Path
 from typing import Any, Callable
 
-from dualyrics import langs, paths, profiles as profiles_mod
+from dualyrics import langs, paths, profiles as profiles_mod, sources as sources_mod
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+DEFAULT_TEMPLATE = "liquid_glass"      # v2.1 default look (templates.INSTALL_DEFAULT_ID)
+OLD_DEFAULT_TEMPLATE = "cinema"        # v2.0 default look
 
 DEFAULT_STYLE = (
     "Translate like a gifted song translator, not word for word. Use natural, fluent, everyday language "
@@ -43,13 +45,15 @@ LIVE_SIZES = ("tiny", "base", "small", "medium")
 UI_THEMES = ("system", "dark", "light")
 DESKTOP_MODES = ("all", "current")
 BACKDROPS = ("dark", "bright", "game", "checker")
-SECTIONS = ("general", "profiles", "templates", "lyrics", "live", "translation", "monitors", "sync", "network",
-            "about")
+SECTIONS = ("general", "profiles", "sources", "templates", "lyrics", "live", "translation", "dubbing", "usage",
+            "monitors", "sync", "network", "ai", "about")
 _TEMPLATE_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{1,39}$")
 
 _COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
 _PROXY = re.compile(r"^(https?|socks5h?|socks4a?)://[^\s/]+(:\d{1,5})?/?$", re.I)
 _MODEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
+_LANG_TAG = re.compile(r"^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8}){0,3}$")
+_UIA_CLASS = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9_ .-]{1,79}$")
 
 
 def _default_ui_language() -> str:
@@ -136,7 +140,8 @@ def defaults() -> dict[str, Any]:
         "live_save_transcripts": False,
         "hotkey_live_pause": "ctrl+alt+p",
         # v2: templates, overlay window, monitors, settings window
-        "template": "cinema",
+        "template": DEFAULT_TEMPLATE,
+        "template_chosen": False,       # the user picked a look (a later default change leaves it alone)
         "ui_theme": "dark",
         "overlay_scale": 1.0,
         "overlay_opacity": 1.0,
@@ -147,6 +152,37 @@ def defaults() -> dict[str, Any]:
         "preview_backdrop": "dark",
         "preview_collapsed": False,
         "settings_section": "general",
+        # v2.1: smart source priority (Settings > Sources; docs/ALGORITHM.md section 2)
+        "source_order": list(sources_mod.DEFAULT_ORDER),
+        "sources_off": [],
+        "lyrics_strict_browsers": True,
+        "lyrics_strict_tolerance": 4.0,
+        "screen_uia": True,
+        "screen_ocr": True,
+        "screen_uia_classes": list(sources_mod.DEFAULT_UIA_CLASSES),
+        "ocr_region": list(sources_mod.DEFAULT_OCR_REGION),
+        "ocr_language": "auto",
+        "ocr_fps": 3.5,
+        "pivot_english": True,
+        "pivot_show_original": False,
+        # v2.1: Gemini usage meter (Settings > Usage; dualyrics/usage.py)
+        "usage_limits": {},               # requests per day per model the user set (else the estimates)
+        "usage_warn": True,               # a notice at 80 % of a free-tier daily limit
+        # v2.1: auto-dubbing (Settings > Dubbing; dualyrics/dub/), off by default
+        "dub_enabled": False,
+        "dub_engine": "auto",
+        "dub_voice": "auto",
+        "dub_speed": 1.0,
+        "dub_volume": 90,
+        "dub_duck": True,
+        "dub_duck_amount": 60,
+        "dub_lyrics": True,
+        "dub_captions": True,
+        "dub_gemini_tts_model": "auto",
+        "dub_gemini_live_model": "auto",
+        "hotkey_dub": "ctrl+alt+d",
+        # v2.1: local control API for AI assistants (Settings > AI & API; dualyrics/api.py, 127.0.0.1 + token)
+        "api_enabled": True,
     }
 
 
@@ -300,6 +336,7 @@ def validate(raw: Any) -> dict[str, Any]:
 
     tpl = r.get("template")
     s["template"] = tpl if isinstance(tpl, str) and _TEMPLATE_ID.match(tpl) else d["template"]
+    s["template_chosen"] = _bool(r.get("template_chosen"), d["template_chosen"])
     s["ui_theme"] = _choice(r.get("ui_theme"), d["ui_theme"], UI_THEMES)
     s["overlay_scale"] = round(_num(r.get("overlay_scale"), d["overlay_scale"], 0.5, 2.0), 3)
     s["overlay_opacity"] = round(_num(r.get("overlay_opacity"), d["overlay_opacity"], 0.2, 1.0), 3)
@@ -309,7 +346,54 @@ def validate(raw: Any) -> dict[str, Any]:
     s["preview_backdrop"] = _choice(r.get("preview_backdrop"), d["preview_backdrop"], BACKDROPS)
     s["preview_collapsed"] = _bool(r.get("preview_collapsed"), d["preview_collapsed"])
     s["settings_section"] = _choice(r.get("settings_section"), d["settings_section"], SECTIONS)
+
+    s["source_order"] = sources_mod.validate_order(r.get("source_order"))
+    s["sources_off"] = sources_mod.validate_off(r.get("sources_off"))
+    for k in ("lyrics_strict_browsers", "screen_uia", "screen_ocr", "pivot_english", "pivot_show_original"):
+        s[k] = _bool(r.get(k), d[k])
+    s["lyrics_strict_tolerance"] = _num(r.get("lyrics_strict_tolerance"), d["lyrics_strict_tolerance"], 1, 20)
+    classes = [c for c in _str_list(r.get("screen_uia_classes"), d["screen_uia_classes"], max_items=40)
+               if _UIA_CLASS.match(c)]
+    s["screen_uia_classes"] = classes
+    s["ocr_region"] = sources_mod.validate_region(r.get("ocr_region"))
+    tag = r.get("ocr_language")
+    s["ocr_language"] = tag if isinstance(tag, str) and (tag == "auto" or _LANG_TAG.match(tag)) else "auto"
+    s["ocr_fps"] = _num(r.get("ocr_fps"), d["ocr_fps"], 1, 6)
+
+    from dualyrics import usage as usage_mod
+    from dualyrics.dub import voices as voices_mod
+
+    s["usage_limits"] = usage_mod.validate_limits(r.get("usage_limits"))
+    for k in ("usage_warn", "dub_enabled", "dub_duck", "dub_lyrics", "dub_captions"):
+        s[k] = _bool(r.get(k), d[k])
+    s["dub_engine"] = _choice(r.get("dub_engine"), d["dub_engine"], voices_mod.ENGINES)
+    voice = r.get("dub_voice")
+    s["dub_voice"] = voice if isinstance(voice, str) and voices_mod.VOICE_RE.match(voice) else d["dub_voice"]
+    s["dub_speed"] = round(_num(r.get("dub_speed"), d["dub_speed"], 0.5, 2.0), 2)
+    s["dub_volume"] = _num(r.get("dub_volume"), d["dub_volume"], 0, 100, True)
+    s["dub_duck_amount"] = _num(r.get("dub_duck_amount"), d["dub_duck_amount"], 0, 100, True)
+    for k in ("dub_gemini_tts_model", "dub_gemini_live_model"):
+        m = r.get(k)
+        s[k] = m if isinstance(m, str) and (m == "auto" or _MODEL.match(m)) else "auto"
+    s["hotkey_dub"] = _hotkey(r.get("hotkey_dub"), d["hotkey_dub"])
+    s["api_enabled"] = _bool(r.get("api_enabled"), d["api_enabled"])
     return s
+
+
+def migrate_template_default(raw: dict[str, Any]) -> dict[str, Any]:
+    """Settings saved before v2.1 have no ``template_chosen``: whoever still has the v2.0 default look (Cinema)
+    never chose a template (v2.0 could not tell a picked Cinema from the default), so they get the new default,
+    Liquid Glass. Any other look (a preset, a user template, the migrated v1 look) is kept. v1 files (no
+    ``template`` key) are left to the v1 migration in the app."""
+    if not raw or "template_chosen" in raw or "template" not in raw:
+        return raw
+    out = dict(raw)
+    if out.get("template") == OLD_DEFAULT_TEMPLATE:
+        out["template"] = DEFAULT_TEMPLATE
+        out["template_chosen"] = False
+    else:
+        out["template_chosen"] = out.get("template") != DEFAULT_TEMPLATE
+    return out
 
 
 def valid_proxy_url(url: str) -> bool:
@@ -403,6 +487,7 @@ class Settings:
                 raw = {}
         if isinstance(raw, dict):
             self.loaded_keys = set(raw)
+            raw = migrate_template_default(raw)
         if isinstance(raw, dict) and "gemini_keys_protected" in raw:
             blob = raw.pop("gemini_keys_protected")
             raw["gemini_keys"] = unprotect_keys(blob)
@@ -447,6 +532,9 @@ class Settings:
         with self._lock:
             merged = copy.deepcopy(self._data)
             merged.update(changes)
+            if "template" in changes and "template_chosen" not in changes and changes["template"] != self._data.get(
+                    "template"):
+                merged["template_chosen"] = True    # a look the user picked: later default changes keep it
             new = validate(merged)
             changed = {k for k in new if new[k] != self._data.get(k)}
             self._data = new

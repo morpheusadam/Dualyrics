@@ -358,3 +358,37 @@ def _error(d, u, k):  # noqa: ANN001
     _circle(d, u, 12, 12, 8.5)
     _line(d, u, 9, 9, 15, 15)
     _line(d, u, 15, 9, 9, 15)
+
+
+@icon("dubbing")
+def _dubbing(d, u, k):  # noqa: ANN001
+    _line(d, u, 3.5, 9.5, 7.5, 9.5, 12.5, 5, 12.5, 19, 7.5, 14.5, 3.5, 14.5, 3.5, 9.5)
+    _arc(d, u, 12.5, 12, 4, -55, 55)
+    _arc(d, u, 12.5, 12, 8, -55, 55)
+
+
+@icon("usage")
+def _usage(d, u, k):  # noqa: ANN001
+    _line(d, u, 3.5, 20.5, 20.5, 20.5)
+    _rect(d, u, 5, 13, 8.5, 20.5, 1)
+    _rect(d, u, 10.25, 8, 13.75, 20.5, 1)
+    _rect(d, u, 15.5, 3.5, 19, 20.5, 1)
+
+
+@icon("ai")
+def _ai(d, u, k):  # noqa: ANN001
+    # a large four-point sparkle and a small one (AI assistants)
+    _line(d, u, 10, 4, 11.6, 10.4, 18, 12, 11.6, 13.6, 10, 20, 8.4, 13.6, 2, 12, 8.4, 10.4, 10, 4)
+    _line(d, u, 18.5, 2.5, 19.2, 4.8, 21.5, 5.5, 19.2, 6.2, 18.5, 8.5, 17.8, 6.2, 15.5, 5.5, 17.8, 4.8, 18.5, 2.5)
+
+
+@icon("star")
+def _star(d, u, k):  # noqa: ANN001
+    import math
+
+    pts = []
+    for i in range(10):
+        r = 8.5 if i % 2 == 0 else 3.8
+        a = math.radians(-90 + i * 36)
+        pts += [12 + r * math.cos(a), 12.6 + r * math.sin(a)]
+    _line(d, u, *pts, pts[0], pts[1])

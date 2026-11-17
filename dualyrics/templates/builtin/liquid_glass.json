@@ -1,0 +1,255 @@
+{
+  "schema": "dualyrics.template/1",
+  "id": "liquid_glass",
+  "name": {
+    "en": "Liquid Glass",
+    "fa": "شیشه‌ی مایع"
+  },
+  "description": {
+    "en": "Clear liquid glass: real blur of what is behind, a bright specular rim, soft depth and rounded corners. Falls back to a frosted look where Windows cannot blur.",
+    "fa": "شیشه‌ی شفاف و روان: پشتش واقعاً تار می‌شود، لبه‌ی براق روشن، سایه‌ی نرم و گوشه‌های گرد؛ جایی که ویندوز نتواند تار کند، نمای مات شبیه‌سازی‌شده."
+  },
+  "builtin": true,
+  "based_on": null,
+  "scale": {
+    "mode": "screen",
+    "reference_height": 1080
+  },
+  "layout": {
+    "translation_position": "below",
+    "mirror_for_rtl": true
+  },
+  "container": {
+    "background": {
+      "color": "#22304A",
+      "opacity": 0.72,
+      "gradient": {
+        "angle": 90,
+        "stops": [
+          {
+            "offset": 0,
+            "color": "#2C3C59"
+          },
+          {
+            "offset": 0.5,
+            "color": "#1C2639"
+          },
+          {
+            "offset": 1,
+            "color": "#111827"
+          }
+        ]
+      }
+    },
+    "blur": {
+      "mode": "acrylic",
+      "strength": 24,
+      "noise": 0.02,
+      "sheen": 0.2
+    },
+    "padding": {
+      "x": 30,
+      "y": 18
+    },
+    "corner_radius": 26,
+    "border": {
+      "width": 1,
+      "color": "#FFFFFF",
+      "opacity": 0.36
+    },
+    "shadow": {
+      "x": 0,
+      "y": 12,
+      "blur": 36,
+      "color": "#000000",
+      "opacity": 0.3
+    },
+    "width": {
+      "unit": "percent",
+      "value": 60,
+      "fit_content": true,
+      "min_px": 0
+    },
+    "align": "center",
+    "line_gap": 6,
+    "group_gap": 10
+  },
+  "lines": {
+    "original": {
+      "visible": true,
+      "font": {
+        "latin": [
+          "Segoe UI Variable Display",
+          "Segoe UI",
+          "Arial"
+        ],
+        "rtl": [
+          "Vazirmatn",
+          "Segoe UI",
+          "Tahoma"
+        ],
+        "size": 30,
+        "weight": 600,
+        "italic": false
+      },
+      "color": "#FFFFFF",
+      "gradient": null,
+      "opacity": 1.0,
+      "outline": {
+        "width": 0,
+        "color": "#000000",
+        "opacity": 1.0
+      },
+      "shadow": [
+        {
+          "x": 0,
+          "y": 1,
+          "blur": 3,
+          "color": "#000000",
+          "opacity": 0.5
+        }
+      ],
+      "letter_spacing": 0,
+      "line_height": 1.2,
+      "max_lines": 2,
+      "uppercase": false
+    },
+    "translation": {
+      "visible": true,
+      "font": {
+        "latin": [
+          "Segoe UI Variable Display",
+          "Segoe UI",
+          "Arial"
+        ],
+        "rtl": [
+          "Vazirmatn",
+          "Segoe UI",
+          "Tahoma"
+        ],
+        "size": 28,
+        "weight": 500,
+        "italic": false
+      },
+      "color": "#DFF6FF",
+      "gradient": null,
+      "opacity": 1.0,
+      "outline": {
+        "width": 0,
+        "color": "#000000",
+        "opacity": 1.0
+      },
+      "shadow": [
+        {
+          "x": 0,
+          "y": 1,
+          "blur": 3,
+          "color": "#000000",
+          "opacity": 0.5
+        }
+      ],
+      "letter_spacing": 0,
+      "line_height": 1.25,
+      "max_lines": 2,
+      "uppercase": false
+    },
+    "next": {
+      "visible": true,
+      "font": {
+        "latin": [
+          "Segoe UI Variable Display",
+          "Segoe UI",
+          "Arial"
+        ],
+        "rtl": [
+          "Vazirmatn",
+          "Segoe UI",
+          "Tahoma"
+        ],
+        "size": 20,
+        "weight": 400,
+        "italic": false
+      },
+      "color": "#F8FAFC",
+      "gradient": null,
+      "opacity": 1.0,
+      "outline": {
+        "width": 0,
+        "color": "#000000",
+        "opacity": 1.0
+      },
+      "shadow": [
+        {
+          "x": 0,
+          "y": 1,
+          "blur": 2,
+          "color": "#000000",
+          "opacity": 0.4
+        }
+      ],
+      "letter_spacing": 0,
+      "line_height": 1.2,
+      "max_lines": 1,
+      "uppercase": false
+    },
+    "speaker": {
+      "visible": true,
+      "font": {
+        "latin": [
+          "Segoe UI Variable Display",
+          "Segoe UI",
+          "Arial"
+        ],
+        "rtl": [
+          "Vazirmatn",
+          "Segoe UI",
+          "Tahoma"
+        ],
+        "size": 20,
+        "weight": 700,
+        "italic": false
+      },
+      "color": "#BFEAFF",
+      "gradient": null,
+      "opacity": 1.0,
+      "outline": {
+        "width": 0,
+        "color": "#000000",
+        "opacity": 1.0
+      },
+      "shadow": [],
+      "letter_spacing": 0,
+      "line_height": 1.2,
+      "max_lines": 1,
+      "uppercase": false,
+      "format": "{name}:",
+      "placement": "above"
+    }
+  },
+  "karaoke": {
+    "enabled": false,
+    "mode": "line",
+    "applies_to": "original",
+    "highlight_color": "#A5E8FF",
+    "highlight_gradient": null,
+    "inactive_opacity": 0.6,
+    "glow": null
+  },
+  "animation": {
+    "enter": "fade_slide_up",
+    "exit": "fade",
+    "duration_ms": 260,
+    "exit_duration_ms": 170,
+    "slide_px": 10,
+    "easing": "ease_out",
+    "reduced_motion": "respect"
+  },
+  "timing": {
+    "min_display_ms": 1000
+  },
+  "hints": {
+    "placement": "keep",
+    "click_through": null,
+    "locked": null
+  }
+}

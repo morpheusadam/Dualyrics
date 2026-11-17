@@ -310,7 +310,7 @@ def test_v1_migration_skipped_for_unreadable_settings(tmp_path):
     saved = []
     app.templates = SimpleNamespace(exists=lambda i: False, save=lambda d: saved.append(d))
     app._migrate_v1()
-    assert saved == [] and app.settings["template"] == "cinema"
+    assert saved == [] and app.settings["template"] == T.INSTALL_DEFAULT_ID
 
 
 def test_v1_migration_moves_left_edge_to_center(tmp_path, monkeypatch):

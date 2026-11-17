@@ -4,6 +4,40 @@ All notable changes to Dualyrics are listed here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-11-18
+
+Smart source priority (the lyrics or subtitles the app already shows first, the audio only when there are none), any language through English, dubbing, a Gemini usage meter, the Liquid Glass look and an MCP server for AI assistants.
+
+### Added
+
+- Sources (`docs/ALGORITHM.md` section 2): synced lyrics, on-screen subtitles and audio (Live), tried in the user's order. New **Settings › Sources** page: order with up/down buttons, each source on or off, globally or per app profile ("This app has its own order").
+- On-screen subtitles (`dualyrics/screen/`): caption elements of YouTube and other web players in Chrome and Edge read through Windows UI Automation; otherwise offline OCR (Windows.Media.Ocr) of a subtitle area of the window in front, sampled 1-6 times a second (3.5 by default) and only when the area changes (bright-pixel mask diff), with stable-text debounce, dedupe, a filter for interface text and OCR noise, and lines that never change (HUD, logos) ignored. OCR language automatic or fixed. Only the app in front is read, and only video players, browsers, games, fullscreen apps or apps with their own subtitle area. The overlay is excluded from screen capture while the screen is read, so OCR never reads Dualyrics' own lines.
+- Subtitle-area picker: click the window, drag a rectangle on a frozen picture of it (saved as fractions of the window, globally or per profile), Reset, and **Test on a window…** showing what UI Automation and OCR read there.
+- Any language: **Pivot through English** (on by default): multilingual Whisper with `task=translate` writes English for speech in any language, then English is translated into the target language; on-screen text in another language goes the same way through the translator. **Also show the original-language line** (off by default) adds the line in its own language, with the English as a small third line.
+- Strict lyrics match for browsers (on by default, tolerance 4 s): title, artist and duration must agree, so an ordinary video never gets the lyrics of a song with a similar name. Strict lookups are cached separately.
+- A browser video without matching lyrics goes to on-screen subtitles, then to Live captions, without waiting for the lookup and whatever "Caption songs that have no lyrics" says.
+- AI assistants (`docs/AI.md`): an MCP server (Model Context Protocol, stdio), `Dualyrics.exe --mcp` or `python -m dualyrics.mcp`, so Claude Desktop, Claude Code and other MCP clients can read and configure Dualyrics. Tools: `get_status`, `get_settings`, `update_settings` (validated patch, all or nothing), `list_templates`, `get_template`, `apply_template`, `create_or_update_template`, `list_profiles`, `upsert_profile`, `delete_profile`, `list_running_apps`, `set_mode`, `set_target_language`, `sync_offset`, `retranslate`, `edit_line_translation`, `get_usage`, `toggle_dubbing`, `show`, `hide`. A small built-in implementation of the protocol (initialize, ping, tools/list, tools/call; versions 2024-11-05 to 2025-11-25) instead of the SDK, which would bundle pydantic, starlette, uvicorn and httpx.
+- Local control API inside the running app (`dualyrics/api.py`): HTTP on 127.0.0.1 only, random port with exclusive use, bearer token; port and token in `%APPDATA%\Dualyrics\api.json` (the token survives restarts). Requests from web pages (an `Origin` header) or with another `Host` (DNS rebinding) are refused. On by default. The MCP server sends tool calls to it, so changes apply at once; when the app is closed it edits the settings files directly, and when the app runs with the API off it refuses. Assistants never see or change Gemini keys and cannot switch the API off.
+- New **Settings › AI & API** page: the API switch and status, Regenerate token, Copy token, and copy-ready configuration for Claude Desktop (`claude_desktop_config.json`), Claude Code (`claude mcp add ...`) and other MCP clients, with example requests.
+- Dubbing (`dualyrics/dub/`, `docs/ALGORITHM.md` section 9), off by default: the translation is spoken aloud. Lyrics lines are made ahead and start with their line (spoken up to 35 % faster to fit, skipped when late); captions are spoken once they stop changing. Engines: Gemini text-to-speech and Gemini Live (speech to speech from the captured audio) with your keys, Microsoft Edge voices (free, online, optional `edge-tts` package) and Piper (offline, optional download), with automatic fallback from one to the next. Other apps are turned down while the voice speaks (per-app volumes of every output device, restored afterwards and on exit). New **Settings › Dubbing** page with engine, voice, speed, volume, ducking and one-click voice installs; tray and overlay menu items, `Ctrl+Alt+D`, and dubbing settings per app profile.
+- Gemini usage meter (`dualyrics/usage.py`): every Gemini request for translation, dubbing and Gemini Live, and every cache hit, recorded in `%APPDATA%\Dualyrics\usage.sqlite` with model, key position (never the key), tokens, seconds of audio, status and the song or video. New **Settings › Usage** page: totals for today, 7 days and this month, a 14-day chart (requests, tokens or audio), today's share of each free-tier daily limit with the reset time (midnight Pacific), breakdowns per model, per key and per song or video, editable limits, CSV export and reset. A notice at 80 % of a daily limit; when a model reaches its limit, the next model or key is used, then the free translator.
+- Liquid Glass template, the new default look: a translucent box with real blur of what is behind it (a click-through window with the Windows acrylic accent under the box, `dualyrics/backdrop.py`), a bright rim, sheen and soft depth; it falls back to a simulated frost where Windows cannot blur. Users who never chose a look move from Cinema to Liquid Glass; a chosen look is kept.
+- About page: links to the repository, issues and releases, and a "Star on GitHub" button.
+- Repository: issue forms (bug, feature, translation request), a pull request template, `SECURITY.md`, `CODE_OF_CONDUCT.md`, `docs/GOOD_FIRST_ISSUES.md`, `docs/PROMO.md`, `docs/social-preview.png` (`tools/social_preview.py`), and a rewritten README in English and Persian with a hero GIF and new screenshots.
+- `tools/screenshots.py` makes `docs/hero.gif` from renderer frames, adds the Sources, Dubbing, Usage and AI & API pages (with sample usage data in its temporary folder), captures windows with `PrintWindow` so notifications or other windows never appear in the pictures, and takes `--overlays` and `--only=<sections>`.
+
+### Changed
+
+- The Smart Auto decision walks the enabled sources in order (new mode "screen"; 0.4 s hysteresis). With the default order every v2.0 decision stays the same; mode Live now means "captions": the app's own subtitles first, then the audio. Putting audio before lyrics captions songs even when they have lyrics.
+- Settings and profiles have new keys (`source_order`, `sources_off`, `lyrics_strict_browsers`, `lyrics_strict_tolerance`, `screen_uia`, `screen_ocr`, `screen_uia_classes`, `ocr_region`, `ocr_language`, `ocr_fps`, `pivot_english`, `pivot_show_original`; per profile `sources_custom`, `source_order`, `sources_off`, `ocr_region`; `api_enabled`). Existing settings keep working.
+- More new keys: `dub_enabled`, `dub_engine`, `dub_voice`, `dub_speed`, `dub_volume`, `dub_duck`, `dub_duck_amount`, `dub_lyrics`, `dub_captions`, `dub_gemini_tts_model`, `dub_gemini_live_model`, `hotkey_dub`, `usage_limits`, `usage_warn`, `template_chosen`.
+- New dependencies: `comtypes` and the WinRT projections `Windows.Media.Ocr`, `Windows.Graphics.Imaging`, `Windows.Globalization` (bundled in the exe).
+
+### Fixed
+
+- Settings › Sources no longer shows an empty 200 px gap under "Settings for" when "All apps" is selected.
+- Settings › Usage: the value above the tallest bar of the chart is no longer cut off.
+
 ## [2.0.0] - 2026-11-17
 
 Live mode, smart auto, per-app profiles, subtitle templates and a Windows installer.
@@ -75,6 +109,7 @@ First public release.
 - A slow lyrics or translation load can no longer write into the state of the next song.
 - Quit ends the process right away instead of waiting up to about 75 seconds for unfinished network requests.
 
-[Unreleased]: ../../compare/v2.0.0...HEAD
+[Unreleased]: ../../compare/v2.1.0...HEAD
+[2.1.0]: ../../compare/v2.0.0...v2.1.0
 [2.0.0]: ../../compare/v1.0.0...v2.0.0
 [1.0.0]: ../../releases/tag/v1.0.0

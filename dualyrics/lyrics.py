@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 import requests
 
@@ -29,16 +29,35 @@ class LyricsResult:
     instrumental: bool = False
     found: bool = False
     network_error: bool = False
+    # what LRCLIB matched (track, artist, duration): checked by the strict match for browsers
+    match_title: str = ""
+    match_artist: str = ""
+    match_duration: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
-        return {"synced": [[ln.time, ln.text] for ln in self.synced], "plain": self.plain,
-                "instrumental": self.instrumental, "found": self.found}
+        d: dict[str, Any] = {"synced": [[ln.time, ln.text] for ln in self.synced], "plain": self.plain,
+                             "instrumental": self.instrumental, "found": self.found}
+        if self.match_title or self.match_artist:
+            d["match"] = [self.match_title, self.match_artist, self.match_duration]
+        return d
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "LyricsResult":
+        m = d.get("match")
+        mt, ma, md = ("", "", 0.0)
+        if isinstance(m, list) and len(m) == 3:
+            try:
+                mt, ma, md = str(m[0] or ""), str(m[1] or ""), float(m[2] or 0)
+            except (TypeError, ValueError):
+                mt, ma, md = ("", "", 0.0)
         return cls(synced=[LyricLine(float(t), str(x)) for t, x in d.get("synced", [])],
                    plain=[str(x) for x in d.get("plain", [])],
-                   instrumental=bool(d.get("instrumental")), found=bool(d.get("found")))
+                   instrumental=bool(d.get("instrumental")), found=bool(d.get("found")),
+                   match_title=mt, match_artist=ma, match_duration=md)
+
+    @property
+    def has_match_info(self) -> bool:
+        return bool(self.match_title)
 
 
 # ---------------------------------------------------------------- LRC parsing
@@ -159,7 +178,13 @@ class LyricsClient:
 
     @staticmethod
     def _to_result(j: dict[str, Any]) -> LyricsResult:
-        res = LyricsResult(found=True, instrumental=bool(j.get("instrumental")))
+        res = LyricsResult(found=True, instrumental=bool(j.get("instrumental")),
+                           match_title=str(j.get("trackName") or j.get("name") or ""),
+                           match_artist=str(j.get("artistName") or ""))
+        try:
+            res.match_duration = float(j.get("duration") or 0)
+        except (TypeError, ValueError):
+            res.match_duration = 0.0
         if j.get("syncedLyrics"):
             res.synced = parse_lrc(j["syncedLyrics"])
         if j.get("plainLyrics"):
@@ -182,8 +207,12 @@ class LyricsClient:
             sc += 3 if diff <= 2 else 1 if diff <= 6 else -4 if diff > 20 else 0
         return sc
 
-    def fetch(self, title: str, artist: str, album: str, duration: float) -> LyricsResult:
-        """get(exact) -> get(cleaned) -> search(cleaned) -> search(free text). Prefers synced lyrics."""
+    def fetch(self, title: str, artist: str, album: str, duration: float,
+              accept: Callable[[dict[str, Any]], bool] | None = None) -> LyricsResult:
+        """get(exact) -> get(cleaned) -> search(cleaned) -> search(free text). Prefers synced lyrics.
+
+        ``accept`` (strict match for browsers) rejects LRCLIB answers that are not this exact track; a
+        search then looks at every result instead of only the best scored one."""
         dur = round(duration) if duration and duration > 0 else None
         plain_fallback: LyricsResult | None = None
         net_errors = 0
@@ -192,6 +221,8 @@ class LyricsClient:
         def consider(j: Any) -> LyricsResult | None:
             nonlocal plain_fallback
             if not isinstance(j, dict):
+                return None
+            if accept is not None and not accept(j):
                 return None
             res = self._to_result(j)
             if res.synced:
@@ -223,6 +254,14 @@ class LyricsClient:
                 log.info("lrclib search failed (%s): %s", params, e)
                 continue
             if not isinstance(arr, list) or not arr:
+                continue
+            if accept is not None:
+                ok = [j for j in arr[:20] if isinstance(j, dict) and accept(j)]
+                if not ok:
+                    continue
+                hit = consider(max(ok, key=lambda j: self._score(j, duration or 0)))
+                if hit:
+                    return hit
                 continue
             best = max(arr[:20], key=lambda j: self._score(j, duration or 0))
             if duration and best.get("duration") and abs(float(best["duration"]) - duration) > 25:

@@ -20,7 +20,7 @@ If the lyrics themselves are wrong or missing, the fix usually belongs on [LRCLI
 Requirements: Windows 10 or 11 and Python 3.10 or newer.
 
 ```powershell
-git clone <repository-url> Dualyrics
+git clone https://github.com/morpheusadam/Dualyrics.git
 cd Dualyrics
 python -m venv .venv
 .venv\Scripts\pip install -r requirements.txt pytest
@@ -39,7 +39,7 @@ $env:DUALYRICS_HOME = "$PWD\.devdata"
 .venv\Scripts\python -m pytest
 ```
 
-The tests cover LRC parsing, title cleaning, settings validation and the translation line-count repair. They do not need network access. Please add a test when you fix a bug in one of those areas.
+The tests cover LRC parsing, title cleaning, settings validation, translation, templates, profiles, the Smart Auto decision, on-screen subtitle logic, the English pivot, dubbing, the usage meter and the MCP tools. They do not need network access. Please add a test when you fix a bug in one of those areas.
 
 ## Code layout
 
@@ -56,6 +56,15 @@ The tests cover LRC parsing, title cleaning, settings validation and the transla
 | `dualyrics/langs.py` | Translation languages and language detection |
 | `dualyrics/cache.py` | Lyrics, translation and offset cache |
 | `dualyrics/tray.py`, `hotkeys.py`, `startup.py`, `net.py`, `winutil.py` | Tray icon, global hotkeys, start with Windows, HTTP and proxy, Win32 helpers |
+| `dualyrics/automode.py`, `sources.py`, `profiles.py` | Smart Auto decision, source order, per-app profiles ([docs/ALGORITHM.md](docs/ALGORITHM.md)) |
+| `dualyrics/render.py`, `templates/`, `backdrop.py` | Overlay renderer, subtitle templates and schema, the real-blur window behind Liquid Glass ([docs/DESIGN.md](docs/DESIGN.md)) |
+| `dualyrics/live/` | Live mode: capture, voice activity, Whisper, caption text, English pivot, model downloads |
+| `dualyrics/screen/` | On-screen subtitles: UI Automation, Windows OCR, capture, change detection |
+| `dualyrics/dub/` | Dubbing: schedule, voice engines, playback, ducking |
+| `dualyrics/usage.py` | Gemini usage meter |
+| `dualyrics/api.py`, `control.py`, `mcp.py` | Local control API, the tools, the MCP server ([docs/AI.md](docs/AI.md)) |
+| `dualyrics/ui/` | Settings window pages and widgets |
+| `dualyrics/i18n*.py` | Interface strings, English and Persian |
 
 ## Building the Windows app
 
@@ -71,8 +80,9 @@ This runs the tests and PyInstaller with `Dualyrics.spec`, and writes `dist\Dual
 - Keep each pull request to one change, and describe what it fixes and how you tested it.
 - Match the existing style: type hints, short docstrings, standard library first.
 - A new setting needs a default in `settings.defaults()`, validation in `settings.validate()`, a control in the settings window, strings in `i18n.py` and a row in the configuration table in `README.md`.
-- New interface text needs both an `en` and an `fa` string in `i18n.py`.
-- Do not add telemetry, accounts or network calls beyond LRCLIB and the chosen translator.
+- New interface text needs both an `en` and an `fa` string in one of the `dualyrics/i18n*.py` tables.
+- Run `.venv\Scripts\python -m pyflakes dualyrics tests tools` as well as the tests.
+- Do not add telemetry, accounts or network calls beyond the ones listed in the Privacy table of the README.
 
 ## Adding an interface language
 

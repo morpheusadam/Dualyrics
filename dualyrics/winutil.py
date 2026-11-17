@@ -259,6 +259,17 @@ class SingleInstance:
         return bool(self.quit_event) and kernel32.WaitForSingleObject(self.quit_event, 0) == 0
 
     @classmethod
+    def is_running(cls) -> bool:
+        """A copy of the app runs in this Windows session (its mutex exists). Does not take the mutex."""
+        if not IS_WINDOWS:
+            return False
+        h = kernel32.OpenMutexW(0x00100000, False, cls.MUTEX)  # SYNCHRONIZE
+        if not h:
+            return False
+        kernel32.CloseHandle(h)
+        return True
+
+    @classmethod
     def wait_until_gone(cls, timeout_s: float) -> bool:
         """Wait for the running copy to exit (its mutex disappears). Call after release()."""
         if not IS_WINDOWS:

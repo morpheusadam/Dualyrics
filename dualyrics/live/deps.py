@@ -93,6 +93,12 @@ def _has(module: str) -> bool:
         return False
 
 
+def has(module: str) -> bool:
+    """An optional package (Live mode, the Edge voices of dubbing) is installed."""
+    activate_runtime()
+    return _has(module)
+
+
 @dataclass(frozen=True)
 class Status:
     missing: tuple[str, ...]        # pip names of missing required packages
@@ -177,9 +183,10 @@ def _find_python() -> list[str] | None:
     return None
 
 
-def install_command(gpu: bool, proxy: str | None) -> list[str] | None:
-    """The pip command line, or None when no suitable Python exists (packaged exe without Python)."""
-    reqs = list(REQUIRED.values()) + (list(GPU.values()) if gpu else [])
+def install_command(gpu: bool, proxy: str | None, packages: list[str] | None = None) -> list[str] | None:
+    """The pip command line, or None when no suitable Python exists (packaged exe without Python).
+    ``packages`` replaces Live mode's requirements (the dubbing voices use the same helper)."""
+    reqs = list(packages) if packages else list(REQUIRED.values()) + (list(GPU.values()) if gpu else [])
     if frozen():
         py = _find_python()
         if py is None:
@@ -194,13 +201,16 @@ def install_command(gpu: bool, proxy: str | None) -> list[str] | None:
 
 
 def install(gpu: bool, proxy_mode: str, proxy_url: str, on_line: Callable[[str], None] = lambda s: None,
-            cancelled: Callable[[], bool] = lambda: False) -> tuple[bool, str]:
-    """Run the installer (blocking; call it from a worker thread). Returns (ok, last message)."""
+            cancelled: Callable[[], bool] = lambda: False, packages: dict[str, str] | None = None,
+            ) -> tuple[bool, str]:
+    """Run the installer (blocking; call it from a worker thread). Returns (ok, last message). ``packages``
+    ({import name: pip requirement}) installs those instead of Live mode."""
     proxy = pip_proxy(proxy_mode, proxy_url)
-    cmd = install_command(gpu, proxy)
+    cmd = install_command(gpu, proxy, list(packages.values()) if packages else None)
     if cmd is None:
         v = f"{sys.version_info.major}.{sys.version_info.minor}"
-        return False, f"Python {v} not found (python.org); it is needed once to install Live mode."
+        what = "these voices" if packages else "Live mode"
+        return False, f"Python {v} not found (python.org); it is needed once to install {what}."
     env = dict(os.environ)
     if proxy == "":
         for k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy"):
@@ -225,8 +235,11 @@ def install(gpu: bool, proxy_mode: str, proxy_url: str, on_line: Callable[[str],
     code = proc.wait()
     importlib.invalidate_caches()
     if code != 0:
-        log.warning("Live mode install failed (exit %s): %s", code, last)
+        log.warning("install failed (exit %s): %s", code, last)
         return False, last or f"pip exit code {code}"
+    if packages:
+        missing = [req for mod, req in packages.items() if not has(mod)]
+        return (False, "installed, but still missing: " + ", ".join(missing)) if missing else (True, last)
     st = status()
     if not st.ready:
         return False, "installed, but still missing: " + ", ".join(st.missing)

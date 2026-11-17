@@ -1,0 +1,84 @@
+name: Bug report
+description: Something does not work as described in the README.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a problem. Please check the [Troubleshooting](https://github.com/morpheusadam/Dualyrics#troubleshooting) table and the [open issues](https://github.com/morpheusadam/Dualyrics/issues) first.
+        Before you paste logs or screenshots, remove API keys, tokens and anything private.
+  - type: input
+    id: version
+    attributes:
+      label: Dualyrics version
+      description: Settings > About shows it.
+      placeholder: "2.1.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How do you run it?
+      options:
+        - Installer (Dualyrics-Setup)
+        - Portable exe or zip
+        - From source
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      placeholder: "Windows 11 24H2"
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part?
+      multiple: true
+      options:
+        - Synced lyrics
+        - On-screen subtitles (OCR or browser captions)
+        - Live mode (captions from audio)
+        - Translation (Gemini or free)
+        - Dubbing
+        - Overlay, templates or monitors
+        - Settings window
+        - Per-app profiles
+        - AI assistants (MCP or control API)
+        - Installer or update
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: app
+    attributes:
+      label: App, game or player
+      description: Spotify, Chrome + YouTube, VLC, the game's name...
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+      description: For lyrics or timing problems, include the song title and artist.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open ...
+        2. Play ...
+        3. See ...
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: Start Dualyrics with --debug, reproduce the problem, then open Settings > About > Open log and paste the relevant lines.
+      render: text
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots
+      description: Drag images here if they help.

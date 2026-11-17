@@ -18,6 +18,7 @@
 #endif
 #define AppName "Dualyrics"
 #define AppExe "Dualyrics.exe"
+#define RepoUrl "https://github.com/morpheusadam/Dualyrics"
 #define RunKey "Software\Microsoft\Windows\CurrentVersion\Run"
 
 [Setup]
@@ -26,6 +27,9 @@ AppName={#AppName}
 AppVersion={#AppVersion}
 AppVerName={#AppName} {#AppVersion}
 AppPublisher=Dualyrics contributors
+AppPublisherURL={#RepoUrl}
+AppSupportURL={#RepoUrl}/issues
+AppUpdatesURL={#RepoUrl}/releases
 AppCopyright=MIT License
 VersionInfoVersion={#AppVersion}
 VersionInfoProductName={#AppName}

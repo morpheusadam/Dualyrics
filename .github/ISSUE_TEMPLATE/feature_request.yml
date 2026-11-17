@@ -1,0 +1,34 @@
+name: Feature request
+description: An idea that would make Dualyrics more useful.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check the [Roadmap](https://github.com/morpheusadam/Dualyrics#roadmap) and the [open issues](https://github.com/morpheusadam/Dualyrics/issues?q=label%3Aenhancement) first. If someone already asked for it, a thumbs-up on that issue counts as a vote.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The situation, the app or game, and what gets in the way today.
+      placeholder: "When I watch anime in VLC, ..."
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like Dualyrics to do?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Anything you tried instead?
+  - type: dropdown
+    id: help
+    attributes:
+      label: Would you like to work on it?
+      options:
+        - "No, just the idea"
+        - "Maybe, with some guidance"
+        - "Yes, I can open a pull request"

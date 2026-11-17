@@ -14,8 +14,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable
 
-from dualyrics import paths
-from dualyrics.live import deps, models
+from dualyrics import langs, paths
+from dualyrics.live import deps, models, pivot
 from dualyrics.live.livetranslate import LiveTranslator
 from dualyrics.live.text import Caption, CaptionStream, ContextWindow, LiveView, display_duration
 from dualyrics.live.vad import Segmenter
@@ -68,6 +68,10 @@ class LiveEngine:
         self.context = ContextWindow(4)
         self._tx = ThreadPoolExecutor(max_workers=2, thread_name_prefix="live-tr")
         self._gen = 0
+        # v2.1 dubbing: the captured audio also goes to Gemini Live (taps get (frame, rate)), and speech that
+        # is our own dubbed voice is not captioned (self_voice(language, start, end) -> True drops it)
+        self.frame_taps: list[Callable[[Any, int], None]] = []
+        self.self_voice: Callable[[str, float, float], bool] = lambda language, start, end: False
 
     # ------------------------------------------------------------------ control (Tk thread)
     @property
@@ -245,6 +249,12 @@ class LiveEngine:
                 self.state = OFF
 
     def _on_frame(self, frame: Any, rms: float) -> None:
+        cap = self._capture
+        for tap in list(self.frame_taps):
+            try:
+                tap(frame, (cap.rate if cap is not None else 0) or 48000)
+            except Exception:
+                log.debug("audio tap failed", exc_info=True)
         seg = self._seg
         if seg is None:
             return
@@ -266,16 +276,27 @@ class LiveEngine:
             return
         name, _dev = live_config(cfg)
         src = cfg["live_source_language"]
-        language = "en" if models.MODELS[name].english_only else (None if src == "auto" else src)
+        english_model = models.MODELS[name].english_only
+        language = "en" if english_model else (None if src == "auto" else src)
         last = self.stream.last
         # names in the prompt help Whisper spell them; a punctuated prompt keeps punctuation in the output
         prompt = " ".join(x.rstrip(".") + "." for x in (self.where, last.text if last else "") if x)
+        # any language: Whisper translates to English first, then English goes to the target (live/pivot.py)
+        tasks = pivot.whisper_tasks(cfg.get("pivot_english", True), cfg.get("pivot_show_original", False),
+                                    english_model, src, cfg["target_language"])
         try:
-            recs = tr.transcribe(a16, start, end, language, prompt)
+            recs = pivot.recognize(tr, a16, start, end, language, prompt, tasks, cfg["target_language"])
         except Exception as e:  # noqa: BLE001
             log.warning("transcribe failed: %s", e)
             return
         for r in recs:
+            try:
+                own = self.self_voice(r.language, start, end)
+            except Exception:
+                own = False
+            if own:
+                log.debug("live: dropped our own dubbed voice: %s", r.text)
+                continue
             with self._lock:
                 kind, cap = self.stream.push(r, now=time.time())
                 if kind is None:
@@ -294,6 +315,8 @@ class LiveEngine:
         cid, version, text = cap.id, cap.version, cap.text
         ctx = self.context.pairs()
         source = cap.language if cfg["live_source_language"] == "auto" else cfg["live_source_language"]
+        if cap.pivot:
+            source = "en"          # the caption is Whisper's English; the original language is only shown
 
         def work() -> None:
             try:
@@ -337,6 +360,8 @@ class LiveEngine:
             day = dt.datetime.fromtimestamp(cap.start)
             where = f" ({self.where})" if self.where else ""
             line = f"[{day:%H:%M:%S}]{where} {cap.text}\n"
+            if cap.alt:
+                line += f"    {cap.alt}\n"
             if cap.translation:
                 line += f"    {cap.translation}\n"
             with open(folder / f"{day:%Y-%m-%d}.txt", "a", encoding="utf-8") as fh:
@@ -403,11 +428,15 @@ class LiveEngine:
                     expire += LINGER
                 if now < expire:
                     pending = show_tr and cap.trans_state == "pending"
-                    original = cap.text
-                    if translation_only and (shown_tr or pending):
-                        original = ""   # the original only stays when there is no translation at all
-                    return LiveView(original=original, translation=shown_tr or ("…" if pending else ""),
-                                    caption_id=cap.id, visible=True)
+                    original, translation, extra = pivot.display_lines(
+                        cap.text, cap.alt, cap.pivot, shown_tr, cfg["target_language"],
+                        bool(cfg.get("pivot_show_original")))
+                    if cap.pivot and langs.same_language(cfg["target_language"], "en"):
+                        pending = False   # target English: Whisper's English line is the translation
+                    if translation_only and (translation or pending):
+                        original, extra = "", ""   # the original only stays when there is no translation at all
+                    return LiveView(original=original, translation=translation or ("…" if pending else ""),
+                                    extra=extra, caption_id=cap.id, visible=True)
         if self.state == LISTENING and now - self.started_at < HELLO:
             return LiveView(status="lv_listening", visible=True)
         return LiveView(visible=False)

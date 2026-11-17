@@ -12,18 +12,25 @@ import sys
 import threading
 import time
 import tkinter as tk
+import zlib
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from dualyrics import (APP_ID, __version__, automode, cache as cache_mod, fonts, i18n, langs, net, paths, procs,
-                       profiles as profiles_mod, startup, sync, templates as templates_mod, winutil)
+from dualyrics import (APP_ID, REPO_URL, __version__, automode, cache as cache_mod, fonts, i18n, langs, net, paths,
+                       procs, profiles as profiles_mod, sources as sources_mod, startup, sync,
+                       templates as templates_mod, usage as usage_mod, winutil)
+from dualyrics.api import ControlServer
+from dualyrics.control import Controller
+from dualyrics.dub import scheduler as dub_sch
+from dualyrics.dub.controller import Dubber, Feed
 from dualyrics.hotkeys import HotkeyManager
 from dualyrics.live import deps as live_deps
 from dualyrics.live.engine import LiveEngine
 from dualyrics.lyrics import LyricsClient, LyricsResult
 from dualyrics.media import MediaWatcher, Track
 from dualyrics.overlay import Content, Overlay
+from dualyrics.screen.engine import ScreenReader, Target
 from dualyrics.settings import Settings
 from dualyrics.translate import TranslationError, Translator
 
@@ -40,13 +47,16 @@ PROFILE_HOLD = 1.0          # a new profile must stay matched this long before i
 LIVE_STOP_GRACE = 8.0       # keep capturing this long after Live is no longer wanted (brief flips)
 LIVE_UNLOAD = 600.0         # free the Whisper model after this long without Live
 DEPS_CHECK = 5.0            # seconds between checks whether the Live mode packages are installed
+SCREEN_STOP_GRACE = 4.0     # keep reading the screen this long after the screen source is no longer wanted
 
 TRANSLATION_KEYS = {"target_language", "provider", "show_translation", "skip_same_language"}
+STRICT_KEYS = {"lyrics_strict_browsers", "lyrics_strict_tolerance"}
 RETRY_KEYS = {"gemini_keys", "gemini_models", "fallback_free", "proxy_mode", "proxy_url"}
 HOTKEY_KEYS = {"hotkeys_enabled", "hotkey_offset_up", "hotkey_offset_down", "hotkey_toggle", "hotkey_live_pause",
-               "hotkey_click_through"}
+               "hotkey_click_through", "hotkey_dub"}
 HOTKEY_COMMANDS = {"offset_up": "offset_up", "offset_down": "offset_down", "toggle": "toggle_visible",
-                   "live_pause": "toggle_live_pause", "click_through": "toggle_click_through"}
+                   "live_pause": "toggle_live_pause", "click_through": "toggle_click_through", "dub": "toggle_dub"}
+NOTICES = {"fallback_model": "us_fallback_model", "fallback_free": "us_fallback_free", "dub_fallback": "dub_fallback"}
 LIVE_KEYS = {"live_model", "live_english_only", "live_device", "live_vad_sensitivity", "live_max_segment",
              "live_context_lines"}
 PASS_THROUGH = {"enabled": True, "mode": "auto", "kind": "other", "id": "", "name": ""}  # profiles switched off
@@ -75,6 +85,7 @@ class SongState:
     edits_lang: str = ""                                      # ... for this target language
     shown: int = -2                  # line index on screen (min display time can hold a line a bit longer)
     shown_at: float = 0.0
+    wait_length: bool = False        # strict browser lookup postponed until the media session gives a length
 
 
 def setup_logging(debug: bool = False) -> None:
@@ -109,6 +120,17 @@ class App:
         self._session_lock = threading.Lock()
         self._session = net.make_session(self.settings["proxy_mode"], self.settings["proxy_url"])
         self.translator = Translator(self.session)
+        # v2.1: every Gemini request is counted (Settings > Usage); limits move to the next key or model
+        self.usage = usage_mod.UsageMeter()
+        threading.Thread(target=self.usage.prune, daemon=True).start()
+        self.usage.media_fn = self._media_label
+        self.usage.limits_fn = lambda: self.settings["usage_limits"]
+        self.usage.on_warning = lambda model, key, used, limit: self.call_soon(
+            lambda: self._usage_warning(model, key, used, limit))
+        gem = self.translator.gemini
+        gem.meter = self.usage
+        gem.key_index = self._key_index
+        gem.on_notice = lambda what, kw: self.call_soon(lambda: self._show_notice(what, kw))
         self.media = MediaWatcher(lambda: self.settings["preferred_players"])
         self.q: queue.Queue[Any] = queue.Queue()
         self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="song")
@@ -119,6 +141,11 @@ class App:
         # v2: smart auto mode, per-app profiles, Live mode
         live_deps.activate_runtime()
         self.live = LiveEngine(self.effective_cfg, self.session, self.translator)
+        # v2.1: auto-dubbing (off by default); it hears the captured audio and never captions its own voice
+        self.dub = Dubber(self.effective_cfg, self.session, gem)
+        self.dub.on_notice = lambda what, kw: gem.notice(what, **kw)
+        self.live.frame_taps.append(self.dub.feed_audio)
+        self.live.self_voice = self.dub.own_voice
         self.auto = automode.AutoSwitch()
         self.decision = automode.Decision(automode.LYRICS, "start")
         self._fg = procs.Foreground(None)
@@ -133,6 +160,11 @@ class App:
         self._scan_busy = False
         self._live_avail = (False, -DEPS_CHECK)
         self._live_off_since = 0.0
+        # v2.1: on-screen subtitles (UI Automation / OCR) as a source
+        self.screen = ScreenReader(self.effective_cfg, self.live.live_tr)
+        self._screen_off_since = 0.0
+        self._screen_avail: dict[str, bool] = {}
+        self._capture_excluded = False
 
         self.root = tk.Tk()
         self.root.withdraw()
@@ -151,6 +183,8 @@ class App:
 
         self.tray = Tray(self.command, self._tray_state)
         self.hotkeys = HotkeyManager(lambda action: self.command(HOTKEY_COMMANDS.get(action, "")))
+        # v2.1: local control API for AI assistants (MCP: dualyrics/mcp.py); 127.0.0.1 only, bearer token
+        self.api = ControlServer(Controller(self.settings, self.templates, app=self))
         self.settings.subscribe(lambda keys: self.call_soon(lambda: self._on_settings(keys)))
 
         startup.refresh()
@@ -190,7 +224,7 @@ class App:
             log.info("migrated the v1 look into the template %s", doc["id"])
         except Exception:
             log.exception("v1 look migration failed")
-            s.update(template=templates_mod.DEFAULT_ID)
+            s.update(template=templates_mod.INSTALL_DEFAULT_ID, template_chosen=False)
 
     def set_startup(self, enabled: bool) -> None:
         ok = startup.set_enabled(enabled)
@@ -204,11 +238,48 @@ class App:
                                    "offset_down": self.settings["hotkey_offset_down"],
                                    "toggle": self.settings["hotkey_toggle"],
                                    "live_pause": self.settings["hotkey_live_pause"],
-                                   "click_through": self.settings["hotkey_click_through"]})
+                                   "click_through": self.settings["hotkey_click_through"],
+                                   "dub": self.settings["hotkey_dub"]})
 
     def clear_cache(self) -> None:
         self.cache.clear()
         self._reload(keep=True)
+
+    # ------------------------------------------------------------------ v2.1: usage meter and notices
+    def _key_index(self, key: str) -> int:
+        """Position of a Gemini key in Settings (1 = first); the meter stores this, never the key."""
+        keys = self.settings["gemini_keys"]
+        return keys.index(key) + 1 if key in keys else 0
+
+    def _media_label(self) -> str:
+        """The song or video a Gemini request is for (Settings > Usage, per song or video). Any thread."""
+        mode = self.decision.mode
+        if mode in (automode.LIVE, automode.SCREEN):
+            where = self.live.where if mode == automode.LIVE else self.screen.target_where()
+            return where or self.live.title or ""
+        tr = self.song.track
+        return f"{tr.artist} — {tr.title}" if tr else ""
+
+    def _say(self, text: str, kind: str = "info", seconds: float = 6.0) -> None:
+        """A short notice on the overlay's status line and, when Settings is open, as a toast."""
+        self._notice = (text, time.time() + seconds)
+        try:
+            self.settings_window.toast(text, kind)
+        except Exception:
+            log.debug("toast failed", exc_info=True)
+
+    def _usage_warning(self, model: str, key: int, used: int, limit: int) -> None:
+        if not self.settings["usage_warn"]:
+            return
+        log.info("usage: %s key #%s at %d of %d requests today", model, key, used, limit)
+        self._say(i18n.t("us_warn_toast", model=model, key=key, used=used, limit=limit,
+                         pct=int(round(used * 100 / max(1, limit)))), "warning")
+
+    def _show_notice(self, what: str, kw: dict[str, Any]) -> None:
+        key = NOTICES.get(what)
+        if key:
+            log.info("notice: %s %s", what, kw)
+            self._say(i18n.t(key, **{k: str(v) for k, v in kw.items()}), "warning")
 
     def _tray_state(self, name: str) -> Any:
         if name == "live_paused":
@@ -261,6 +332,10 @@ class App:
         if failed:
             log.warning("hotkeys unavailable: %s", failed)
         threading.Thread(target=self._instance_listener, name="instance", daemon=True).start()
+        if self.settings["api_enabled"]:
+            self.api.start()
+        else:
+            self.api.stop()              # api.json says "not running" (an old port from a crash is cleared)
         if self._open_settings_on_start:
             self.root.after(400, self.settings_window.open)
         self.root.after(TICK_MS, self._tick)
@@ -272,6 +347,10 @@ class App:
             return
         self._stopping = True
         log.info("shutting down")
+        try:
+            self.api.stop()
+        except Exception:
+            log.debug("control API stop failed", exc_info=True)
         try:
             self.settings_window.close()
         except Exception:
@@ -287,6 +366,14 @@ class App:
             self.live.shutdown()
         except Exception:
             log.debug("live shutdown failed", exc_info=True)
+        try:
+            self.screen.shutdown()
+        except Exception:
+            log.debug("screen reader shutdown failed", exc_info=True)
+        try:
+            self.dub.shutdown()          # stops speaking; other apps get their volume back
+        except Exception:
+            log.debug("dubber shutdown failed", exc_info=True)
         self.executor.shutdown(wait=False, cancel_futures=True)
         self._scan.shutdown(wait=False, cancel_futures=True)
         self.settings.save()
@@ -320,6 +407,8 @@ class App:
             # adding/removing Gemini keys switches the effective provider (free <-> gemini)
             self.song.trans_retries = 0
             self._reload(keep=True)
+        elif keys & STRICT_KEYS:
+            self._reload(keep=False)   # the lookup itself changes (strict match on or off, tolerance)
         elif keys & RETRY_KEYS and (self.song.trans_status == "failed" or self.song.status == "st_network"):
             self.song.trans_retries = 0
             self._reload(keep=True)
@@ -327,13 +416,17 @@ class App:
             self.restart_hotkeys()
         if keys & LIVE_KEYS:
             self.live.reload_if_changed()
+        if keys & {"screen_uia", "screen_ocr"}:
+            self._screen_avail = {}
         if "live_enabled" in keys:
             self.recheck_live_deps()
             if not self.settings["live_enabled"]:
                 self.live.stop()
         if keys & {"profiles", "profiles_enabled", "profile_activation"}:
             self._pending_match = ("", 0.0)
-        if keys & {"visible", "click_through", "locked", "ui_language", "translation_only"}:
+        if "api_enabled" in keys:
+            self.api.start() if self.settings["api_enabled"] else self.api.stop()
+        if keys & {"visible", "click_through", "locked", "ui_language", "translation_only", "dub_enabled", "profiles"}:
             self.tray.refresh()
         self.settings_window.on_settings_changed(keys)
 
@@ -434,6 +527,18 @@ class App:
                 self._hidden_song = self.song.key
         elif cmd == "hide_app":
             self.hide_for_app()
+        elif cmd == "toggle_dub":
+            new = not self.effective_cfg()["dub_enabled"]
+            prof = self.match.profile
+            if prof.get("id") and prof.get("dub_custom"):
+                self._set_profile_field(prof["id"], dub_enabled=new)   # this app has its own dubbing settings
+                self._update_profile(time.time())    # take the new value now, not on the next tick
+            else:
+                s.update(dub_enabled=new)
+            self._say(i18n.t("dub_on" if new else "dub_off"), "info", 2.5)
+            self.tray.refresh()
+        elif cmd == "open_github":
+            os.startfile(REPO_URL)
         elif cmd == "save_transcript":
             path = self.live.save_transcript()
             self._notice = (i18n.t("m_transcript_saved", name=path.name) if path else i18n.t("m_transcript_empty"),
@@ -550,7 +655,7 @@ class App:
 
     def menu_info(self) -> dict[str, Any]:
         st = self.song
-        live = self.decision.mode == automode.LIVE
+        live = self.decision.mode in (automode.LIVE, automode.SCREEN)
         info: dict[str, Any] = {
             "mode": self.decision.mode, "global_mode": self.settings["mode"],
             "song": st.key if st.lyrics is not None and st.lyrics.found and not live else "",
@@ -565,9 +670,9 @@ class App:
         c = self.overlay._content
         if c is not None:
             if live:
-                cap = self.live.stream.last
-                if cap is not None:
-                    info.update(line_original=cap.text, line_translation=cap.translation)
+                v = self._current_view()
+                if v is not None and (v.original or v.translation):
+                    info.update(line_original=v.original, line_translation=v.translation)
             elif c.index >= 0 and st.lyrics is not None and st.lyrics.synced and c.index < len(st.lyrics.synced):
                 i = c.index
                 info.update(line_index=i, line_original=st.lyrics.synced[i].text,
@@ -635,22 +740,35 @@ class App:
     def _load_inner(self, track: Track, gen: int, st: SongState) -> None:
         # ``st`` is the state object of *this* load: writing to self.song instead could hit the next song
         key = cache_mod.track_key(track.title, track.artist)
-        cached = self.cache.get_lyrics(key)
-        if cached is not None:
+        cfg = self.settings.snapshot()
+        # browsers: only lyrics of exactly this track (title, artist and length), so a video never gets the
+        # lyrics of a song with a similar name; looked up and cached separately from the normal lookup
+        strict = bool(cfg["lyrics_strict_browsers"]) and sources_mod.is_browser_media(cfg["profiles"], track.app)
+        tol = float(cfg["lyrics_strict_tolerance"])
+        lkey = f"{key}|strict{tol:g}" if strict else key
+        cached = self.cache.get_lyrics(lkey)
+        if strict and not (track.duration and track.duration > 0) and cached is None:
+            # a browser often publishes the title before the length; a strict match needs the length, so this
+            # is "no lyrics for now" (never cached): the lookup runs again when the length arrives (_update)
+            res = LyricsResult()
+            st.wait_length = True
+        elif cached is not None:
             res = LyricsResult.from_dict(cached)
         else:
             if self._current(gen) and st.lyrics is None:
                 st.status = "st_searching"
-            res = LyricsClient(self.session()).fetch(track.title, track.artist, track.album, track.duration)
+            accept = sources_mod.strict_accept(track.title, track.artist, track.duration, tol) if strict else None
+            res = LyricsClient(self.session()).fetch(track.title, track.artist, track.album, track.duration,
+                                                     accept=accept)
             if not self._current(gen):
                 return
             if res.network_error:
                 st.status, st.error_at = "st_network", time.time()
                 log.warning("lyrics lookup failed (network): %s", track.key)
                 return
-            self.cache.put_lyrics(key, res.to_dict())
-            log.info("lyrics %s: synced=%d plain=%d instrumental=%s", "found" if res.found else "not found",
-                     len(res.synced), len(res.plain), res.instrumental)
+            self.cache.put_lyrics(lkey, res.to_dict())
+            log.info("lyrics %s%s: synced=%d plain=%d instrumental=%s", "found" if res.found else "not found",
+                     " (strict)" if strict else "", len(res.synced), len(res.plain), res.instrumental)
         if not self._current(gen):
             return
         st.times = [ln.time for ln in res.synced]
@@ -672,6 +790,8 @@ class App:
             return
         edits = dict(st.edits) if st.edits_lang == target else {}
         if hit and len(hit["lines"]) == len(lines):
+            if provider == "gemini":
+                self.usage.cache_hit(media=f"{track.artist} — {track.title}")   # a whole-song request saved
             out = [str(x) for x in hit["lines"]]
             if edits and any(out[i] != v for i, v in edits.items() if i < len(out)):
                 self._store_translation(st, key, target, provider, out, False, "", edits)
@@ -744,6 +864,9 @@ class App:
         if track and track.key != (st.track.key if st.track else None):
             self._start_load(track)
             st = self.song
+        elif track and st.wait_length and track.duration:
+            st.wait_length = False
+            self._start_load(track, keep=True)   # the length arrived after the title (strict browser lookup)
         elif track and st.status == "st_network" and now - st.error_at > NETWORK_RETRY:
             st.error_at = now
             self._start_load(track, keep=True)
@@ -757,13 +880,18 @@ class App:
         self.overlay.tick()
         if self._hidden_song and (track is None or cache_mod.track_key(track.title, track.artist) != self._hidden_song):
             self._hidden_song = ""
-        d = self._decide(now)
+        d, probe = self._decide(now)
         if d.mode == automode.HIDE and media.error and track is None:
             d = automode.Decision(automode.LYRICS, "media_error")  # keep v1's "media controls unavailable" notice
-        if d.mode == automode.LIVE:
+        self._run_screen(now, probe or d.mode == automode.SCREEN)
+        if d.mode == automode.SCREEN:
+            self._idle_live(now)
+            content = self._live_content(now, self.screen.view(self.translation_only()), "screen")
+            visible = bool(s["visible"]) and content is not None
+        elif d.mode == automode.LIVE:
             self._live_off_since = 0.0
             self._start_live()
-            content = self._live_content(now)
+            content = self._live_content(now, self.live.view(now, self.translation_only()), "live")
             visible = bool(s["visible"]) and content is not None
         else:
             self._idle_live(now)
@@ -781,6 +909,56 @@ class App:
             self.overlay.show()
         else:
             self.overlay.hide()
+        try:
+            self._dub_tick(d)
+        except Exception:
+            log.exception("dubbing tick failed")
+
+    # ------------------------------------------------------------------ v2.1: auto-dubbing
+    def _dub_tick(self, d: automode.Decision) -> None:
+        """Tell the dubber what is on screen: timed lyric translations, or the current caption's translation
+        (Live mode also hands it the captured audio for Gemini Live)."""
+        cfg = self.effective_cfg()
+        if not cfg["dub_enabled"]:
+            if self.dub.mode != "off":
+                self.dub.update(Feed())
+            return
+        lang = cfg["target_language"]
+        feed = Feed(lang=lang)
+        if d.mode == automode.LYRICS and cfg["dub_lyrics"]:
+            st = self.song
+            res = st.lyrics
+            if res is not None and res.found and res.synced:
+                if not self.media.playing:
+                    self.dub.stop_speaking()          # paused: keep the clips made so far, say nothing
+                    return
+                feed.mode, feed.song, feed.pos = "lyrics", f"{st.key}|{lang}", self.position()
+                feed.lines = self._dub_lines(st, res)
+        elif d.mode in (automode.LIVE, automode.SCREEN) and cfg["dub_captions"]:
+            if d.mode == automode.LIVE:
+                v = self.live.view(time.time(), False)
+                feed.mode, feed.where = "audio", self.live.where
+            else:
+                v = self.screen.view(False)
+                feed.mode = "caption"
+            feed.song = d.mode
+            text = v.translation if v.visible and v.translation not in ("", "…") else ""
+            feed.caption_key, feed.caption_text = f"{d.mode}:{v.caption_id}", text
+        self.dub.update(feed)
+
+    def _dub_lines(self, st: SongState, res: LyricsResult) -> list[dub_sch.Line]:
+        times = st.times if len(st.times) == len(res.synced) else [ln.time for ln in res.synced]
+        trans = st.translation
+        dur = st.track.duration if st.track and st.track.duration else 0.0
+        out = []
+        for i, ln in enumerate(res.synced):
+            text = (trans[i] if i < len(trans) else st.preview.get(i, "")).strip()
+            if not text or text == ln.text.strip():
+                continue
+            t0 = times[i]
+            t1 = times[i + 1] if i + 1 < len(times) else (dur if dur > t0 + 0.5 else t0 + 5.0)
+            out.append(dub_sch.Line(f"{i}:{zlib.crc32(text.encode('utf-8'))}", text, t0, t1))
+        return out
 
     # ------------------------------------------------------------------ v2: profiles, smart auto, Live
     def _sample_system(self, now: float) -> None:
@@ -860,12 +1038,16 @@ class App:
             return automode.LYR_SEARCHING
         return automode.LYR_FOUND if st.lyrics.found else automode.LYR_NOT_FOUND
 
-    def _decide(self, now: float) -> automode.Decision:
+    def _decide(self, now: float) -> tuple[automode.Decision, bool]:
+        """The decision after hysteresis, and whether the screen reader should run (it is the next source to
+        try, so it must look for subtitles even before they are shown)."""
         s, media = self.settings, self.media
         prof, via = self.match.profile, self.match.via
         has_track = media.track is not None and media.has_session
         recent = has_track and not media.playing and (
             not s["hide_when_idle"] or now - media.last_playing_at <= s["idle_hide_delay"])
+        cfg = self.effective_cfg()
+        playing = has_track and media.playing
         inp = automode.Inputs(
             mode=profiles_mod.effective_mode(prof, s["mode"]),
             profile_enabled=bool(prof.get("enabled", True)),
@@ -875,12 +1057,18 @@ class App:
             live_ready=self.live_ready(),
             live_when_no_lyrics=s["live_when_no_lyrics"],
             live_context=profiles_mod.is_live_context(prof, via),
+            sources=sources_mod.effective_sources(cfg, prof if s["profiles_enabled"] else None),
+            screen_ready=self._screen_ready(prof, via),
+            screen_text=self.screen.has_text(),
+            browser_video=playing and sources_mod.is_browser_media(s["profiles"], media.track.app if media.track
+                                                                    else ""),
         )
-        d = self.auto.update(automode.decide(inp), now)
+        raw = automode.decide(inp)
+        d = self.auto.update(raw, now)
         if d.mode != self.decision.mode:
             log.info("mode: %s (%s)", d.mode, d.reason)
         self.decision = d
-        return d
+        return d, raw.probe_screen
 
     def translation_only(self) -> bool:
         return bool(self.effective_cfg()["translation_only"])
@@ -910,14 +1098,82 @@ class App:
             self.live.unload()
             self._live_off_since = 0.0
 
-    def _live_content(self, now: float) -> Content | None:
-        v = self.live.view(now, self.translation_only())
+    def _live_content(self, now: float, v: Any, song: str = "live") -> Content | None:
+        """Overlay content for Live mode or on-screen subtitles: the line, its translation under it and, with
+        the English pivot and "also show the original", the English as a small third line."""
         notice, until = self._notice
         has_notice = bool(notice) and now < until
         status = notice if has_notice else (i18n.t(v.status, **v.status_kw) if v.status else "")
         if not v.visible:
-            return Content(status=status, song="live") if has_notice else None
-        return Content(original=v.original, translation=v.translation, status=status, song="live")
+            return Content(status=status, song=song) if has_notice else None
+        return Content(original=v.original, translation=v.translation, next=v.extra, status=status, song=song)
+
+    def _current_view(self) -> Any:
+        if self.decision.mode == automode.SCREEN:
+            return self.screen.view(self.translation_only())
+        if self.decision.mode == automode.LIVE:
+            return self.live.view(time.time(), self.translation_only())
+        return None
+
+    # ------------------------------------------------------------------ v2.1: on-screen subtitles
+    def _screen_ready(self, prof: dict[str, Any], via: str) -> bool:
+        """The window in front may be read for subtitles, and a reader (UIA for browsers, OCR) works here."""
+        fg = self._fg
+        if not fg.hwnd or fg.shell or not self.settings["profiles_enabled"]:
+            return False
+        if not sources_mod.screen_allowed(prof, via):
+            return False
+        cfg = self.effective_cfg()
+        ok = False
+        if cfg["screen_ocr"]:
+            ok = self._screen_available("ocr")
+        if not ok and cfg["screen_uia"] and prof.get("kind") == "browser":
+            ok = self._screen_available("uia")
+        return ok
+
+    def _screen_available(self, what: str) -> bool:
+        """Checked once on a worker thread (WinRT and COM must not set up their apartment on the Tk thread);
+        False until the answer is there."""
+        if "checking" not in self._screen_avail:
+            self._screen_avail["checking"] = True
+            avail = self._screen_avail
+
+            def check() -> None:
+                from dualyrics.screen import ocr, uia
+
+                for name, fn in (("ocr", ocr.available), ("uia", uia.available)):
+                    try:
+                        avail[name] = bool(fn())
+                    except Exception:
+                        avail[name] = False
+                    log.info("screen source: %s %s", name, "available" if avail[name] else "unavailable")
+
+            threading.Thread(target=check, name="screen-check", daemon=True).start()
+        return bool(self._screen_avail.get(what))
+
+    def _run_screen(self, now: float, wanted: bool) -> None:
+        """Start, retarget or stop the screen reader; our overlay is left out of screen grabs meanwhile."""
+        if wanted:
+            self._screen_off_since = 0.0
+            prof, fg = self.match.profile, self._fg
+            cfg = self.effective_cfg()
+            where = fg.title[:80] if self.match.via == "fullscreen" else (
+                prof.get("name", "") if prof.get("id") not in profiles_mod.SPECIAL_IDS else "")
+            tr = self.media.track
+            self.screen.start(Target(
+                hwnd=fg.hwnd, key=str(prof.get("id") or ""), kind=str(prof.get("kind") or "other"),
+                region=tuple(sources_mod.region_of(cfg, prof if self.settings["profiles_enabled"] else None)),
+                where=where, title=f"{tr.artist} — {tr.title}" if tr and self.media.playing else ""))
+        elif self.screen.running:
+            if not self._screen_off_since:
+                self._screen_off_since = now
+            elif now - self._screen_off_since > SCREEN_STOP_GRACE:
+                log.info("screen source: stopped reading")
+                self.screen.stop()
+        excluded = self.screen.running
+        if excluded != self._capture_excluded and self.overlay.hwnd:
+            self.overlay.set_capture_excluded(excluded)
+            self._capture_excluded = excluded
 
     def _lookahead(self, st: SongState) -> None:
         """While Gemini translates the whole song, translate the lines about to be sung with the free
@@ -1034,8 +1290,15 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--startup", action="store_true", help="launched by Windows at sign-in")
     parser.add_argument("--debug", action="store_true", help="verbose log")
     parser.add_argument("--quit", action="store_true", help="close the running copy (used by the installer)")
+    parser.add_argument("--mcp", action="store_true",
+                        help="run the MCP server for AI assistants on stdin/stdout (started by the MCP client)")
     parser.add_argument("--version", action="version", version=f"Dualyrics {__version__}")
     args = parser.parse_args(argv)
+    if args.mcp:  # no window, no single-instance lock: it talks to the running app (docs/AI.md)
+        from dualyrics import mcp
+
+        mcp.main()
+        return
 
     instance = winutil.SingleInstance()
     if args.quit:

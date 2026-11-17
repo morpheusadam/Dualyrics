@@ -284,6 +284,14 @@ from dualyrics.i18n_v2 import S as _V2  # noqa: E402 - v2 strings live in their 
 
 STRINGS.update(_V2)
 
+from dualyrics.i18n_v21 import S as _V21  # noqa: E402 - v2.1 strings (Settings > Sources)
+
+STRINGS.update(_V21)
+
+from dualyrics.i18n_ai import S as _AI  # noqa: E402 - v2.1 strings (Settings > AI & API)
+
+STRINGS.update(_AI)
+
 
 def set_language(lang: str) -> None:
     global _lang
@@ -298,10 +306,15 @@ def is_rtl() -> bool:
     return _lang == "fa"
 
 
-def t(key: str, **kw: object) -> str:
+def t(key: str, /, **kw: object) -> str:   # positional-only: notices may carry their own "key" argument
     entry = STRINGS.get(key)
     if not entry:
         return key
     text = entry.get(_lang) or entry["en"]
     text = text.format(**kw) if kw else text
     return rtl_embed(text) if _lang == "fa" else text
+
+from dualyrics.i18n_dub import S as _DUB  # noqa: E402 - v2.1 strings (dubbing, usage, About links)
+
+for _k, _v in _DUB.items():
+    STRINGS.setdefault(_k, _v)       # never replaces a string defined above

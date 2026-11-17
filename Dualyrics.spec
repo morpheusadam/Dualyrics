@@ -47,8 +47,21 @@ hiddenimports = [
     "winrt.windows.foundation.collections",
     "winrt.windows.media.control",
     "winrt.windows.storage.streams",
+    # v2.1 screen source: Windows OCR and UI Automation (comtypes wrapper generated at build time)
+    "winrt.windows.media.ocr",
+    "winrt.windows.graphics.imaging",
+    "winrt.windows.globalization",
     "socks",
 ]
+try:
+    import comtypes.client
+
+    comtypes.client.GetModule("UIAutomationCore.dll")   # writes comtypes.gen.UIAutomationClient into the venv
+except Exception as e:  # noqa: BLE001
+    print("warning: UI Automation wrapper not generated:", e)
+from PyInstaller.utils.hooks import collect_submodules  # noqa: E402
+
+hiddenimports += [m for m in collect_submodules("comtypes") if not m.startswith("comtypes.test")]
 
 # Live mode's packages (numpy, faster-whisper, CTranslate2, PyAudioWPatch: ~250 MB) are NOT bundled; the app
 # installs them on demand into %APPDATA%\Dualyrics\live-runtime (dualyrics/live/deps.py). They import
