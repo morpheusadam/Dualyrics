@@ -26,6 +26,8 @@ REPO = "Systran/faster-whisper-{name}"
 NEEDED = ("config.json", "model.bin", "tokenizer.json")       # plus vocabulary.txt or vocabulary.json
 OPTIONAL = ("preprocessor_config.json",)
 CHUNK = 1 << 20
+MIN_MODEL_BIN = 30_000_000       # the smallest model.bin (tiny) is ~75 MB; less is an unfinished file
+_KNOWN = set(NEEDED) | set(OPTIONAL) | {"vocabulary.txt", "vocabulary.json"}
 
 
 @dataclass(frozen=True)
@@ -68,9 +70,26 @@ def model_path(name: str) -> Path:
 
 
 def is_installed(name: str) -> bool:
+    """The model finished downloading: the ``.complete`` marker (written last) exists, every needed file is
+    there and, when the marker lists sizes (v2.2), every file still has its size. A killed download, a
+    truncated file or an emptied folder never counts as installed (the idea of LiveTranslate's
+    ``_hf_repo_complete``: files that do not resolve or are too small mean an unfinished cache)."""
     p = model_path(name)
-    return (p / ".complete").exists() and all((p / f).exists() for f in NEEDED) and (
-        (p / "vocabulary.txt").exists() or (p / "vocabulary.json").exists())
+    try:
+        mark = json.loads((p / ".complete").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    if not all((p / f).is_file() for f in NEEDED) or not (
+            (p / "vocabulary.txt").is_file() or (p / "vocabulary.json").is_file()):
+        return False
+    sizes = mark.get("sizes") if isinstance(mark, dict) else None
+    try:
+        if isinstance(sizes, dict):
+            return all((p / f).stat().st_size == int(n) for f, n in sizes.items()
+                       if f in _KNOWN)
+        return (p / "model.bin").stat().st_size >= MIN_MODEL_BIN          # v2.1 marker: no sizes
+    except (OSError, ValueError, TypeError):
+        return False
 
 
 def installed_models() -> list[str]:
@@ -202,8 +221,9 @@ def _download_locked(info: ModelInfo, session: Any, progress: Callable[[int, int
             raise OSError(problem)
         os.replace(part, target)
         done += target.stat().st_size
-    files = [f.name for f in files]
-    (dest / ".complete").write_text(json.dumps({"repo": info.repo, "files": files}), encoding="utf-8")
+    sizes = {f.name: (dest / f.name).stat().st_size for f in files}
+    (dest / ".complete").write_text(json.dumps({"repo": info.repo, "files": list(sizes), "sizes": sizes}),
+                                    encoding="utf-8")
     log.info("model %s downloaded (%d MB)", name, done // (1024 * 1024))
     return dest
 

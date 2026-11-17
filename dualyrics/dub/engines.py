@@ -144,7 +144,7 @@ class GeminiTTS:
         self.discovery.refresh(keys[0])
         body = {"contents": [{"role": "user", "parts": [{"text": tts_prompt(text, lang, rate)}]}],
                 "generationConfig": {"responseModalities": ["AUDIO"], "speechConfig": {"voiceConfig": {
-                    "prebuiltVoiceConfig": {"voiceName": voices.gemini_voice(voice)}}}}}
+                    "prebuiltVoiceConfig": {"voiceName": voices.gemini_voice(voice, voices.gender_for(cfg, lang))}}}}}
         limited, last = False, "no speech model"
         for model in self.discovery.tts_models(cfg.get("dub_gemini_tts_model", "auto")):
             for key in keys:
@@ -169,7 +169,11 @@ class GeminiTTS:
 
                 if status == 429:
                     limited = True
-                    self.gemini._cooldown(model, key, rate_limit_wait(msg, raw))
+                    mark = getattr(self.gemini, "mark_limited", None)   # the key pool tells minute from day limits
+                    if callable(mark):
+                        mark(model, key, msg, raw)
+                    else:
+                        self.gemini._cooldown(model, key, rate_limit_wait(msg, raw))
                 else:
                     self.gemini._cooldown(model, key, 3600 if status in (400, 404) else 120)
                 last = f"{model}: HTTP {status} {msg}"
@@ -187,7 +191,7 @@ class EdgeTTS:
         return edge.available()
 
     def speak(self, text: str, lang: str, voice: str, rate: float, cfg: dict[str, Any]) -> Clip:
-        v = voices.edge_voice(voice, lang)
+        v = voices.edge_voice(voice, lang, voices.gender_for(cfg, lang))
         if v is None:
             raise TTSError(f"no Edge voice for {lang}")
         try:
@@ -205,8 +209,11 @@ class PiperTTS:
         return piper.installed()
 
     def speak(self, text: str, lang: str, voice: str, rate: float, cfg: dict[str, Any]) -> Clip:
-        path = voices.piper_voice(voice, lang)
-        if path is None or not piper.voice_installed(path):
+        # the voice of the chosen gender, else the language's other downloaded voice
+        cands = [voices.piper_voice(voice, lang, voices.gender_for(cfg, lang)), voices.piper_voice(voice, lang),
+                 *voices.PIPER_BY_GENDER.get(voices.base_lang(lang), {}).values()]
+        path = next((p for p in cands if p and piper.voice_installed(p)), None)
+        if path is None:
             raise TTSError(f"no Piper voice downloaded for {lang}")
         try:
             pcm, sr = wav_to_pcm(piper.synthesize(text, path, lang, rate))

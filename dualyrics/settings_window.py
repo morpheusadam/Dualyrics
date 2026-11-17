@@ -60,6 +60,10 @@ class SettingsWindow:
         self._tpl_page: Any = None
         self._toast: Toast | None = None
         self._resize_job: str | None = None
+        # grows when the window closes or another page is shown: results of background work started on an
+        # older page are not delivered to its (destroyed) widgets
+        self.epoch = 0
+        self.jobs: set[str] = set()   # installs still running (kept when the window closes and opens again)
         _init_theme(self.s["ui_theme"])
 
     # ------------------------------------------------------------------ lifecycle
@@ -75,6 +79,7 @@ class SettingsWindow:
         self._build()
 
     def close(self) -> None:
+        self.epoch += 1
         self._flush()
         if self.win is not None:
             try:
@@ -143,14 +148,46 @@ class SettingsWindow:
     def effective_target(self) -> str:
         return self.app.effective_cfg()["target_language"]
 
-    def _run_bg(self, work: Callable[[], Any], done: Callable[[Any], None]) -> None:
-        """Run ``work`` in a thread and deliver its result to ``done`` on the Tk thread."""
+    def alive(self, epoch: int) -> bool:
+        """The page of ``epoch`` is still shown (the window is open and no other page was built since)."""
+        if epoch != self.epoch or self.win is None:
+            return False
+        try:
+            return bool(self.win.winfo_exists())
+        except tk.TclError:          # the Tk interpreter is gone (app closing)
+            return False
+
+    def ui(self, fn: Callable[[], Any], epoch: int | None = None) -> None:
+        """Run ``fn`` on the Tk thread if the page that asked is still shown (thread-safe). For progress lines
+        and other updates of a page's widgets from background work: a closed window, another page or a widget
+        destroyed in between drops the update instead of raising TclError."""
+        ep = self.epoch if epoch is None else epoch
+
+        def run() -> None:
+            if not self.alive(ep):
+                return
+            try:
+                fn()
+            except tk.TclError:
+                log.debug("settings update after its widget was destroyed", exc_info=True)
+
+        self.app.call_soon(run)
+
+    def _run_bg(self, work: Callable[[], Any], done: Callable[[Any], None],
+                after: Callable[[Any], None] | None = None) -> None:
+        """Run ``work`` in a thread and deliver its result to ``done`` on the Tk thread, only while the page
+        that started it is shown. ``after(result)`` runs on the Tk thread in any case (effects that must not
+        be lost when the window was closed meanwhile, e.g. re-checking installed packages)."""
+        ep = self.epoch
+
         def runner() -> None:
             try:
                 res = work()
             except Exception as e:  # noqa: BLE001
                 res = e
-            self.app.call_soon(lambda: done(res) if self.win is not None and self.win.winfo_exists() else None)
+            if after is not None:
+                self.app.call_soon(lambda: after(res))
+            self.ui(lambda: done(res), ep)
 
         threading.Thread(target=runner, daemon=True).start()
 
@@ -394,6 +431,7 @@ class SettingsWindow:
         section = ALIASES.get(section, section)
         if section not in dict(SECTIONS) or self.win is None:
             return
+        self.epoch += 1               # background work of the page being left reports to nobody
         self._flush()
         self.section = section
         if self.s["settings_section"] != section:
@@ -807,7 +845,7 @@ class SettingsWindow:
 
     # -- Live mode
     def _build_live(self, f: Any) -> None:
-        from dualyrics.live import deps, models
+        from dualyrics.live import deps, models, silero, wincaptions
 
         k = self.kit
         assert k is not None
@@ -816,7 +854,7 @@ class SettingsWindow:
         status.pack(fill="x", pady=(T.SPACE[3], 0))
         gpu_var = tk.BooleanVar(value=_has_nvidia())
         install_log = k.label(g, "", "caption", T.TEXT_SECONDARY, wrap=560)
-        busy = {"install": False, "download": False}
+        busy = {"download": False}
         acts = k.actions(g)
 
         def refresh() -> None:
@@ -834,34 +872,40 @@ class SettingsWindow:
                          have=t("yes") if models.is_installed(name) else t("lv_not_downloaded"),
                          device=dev or t("lv_device_unknown"))
             status.configure(text=text)
-            install_btn.configure(state="disabled" if busy["install"] else "normal",
+            install_btn.configure(state="disabled" if "live_install" in self.jobs else "normal",
                                   text=t("lv_reinstall") if st.ready else t("lv_install"))
 
         def install() -> None:
-            busy["install"] = True
+            if "live_install" in self.jobs:      # still running from before the window was closed
+                return
+            self.jobs.add("live_install")
             refresh()
             install_log.configure(text=t("lv_installing"))
             gpu = gpu_var.get()
             cfg = self.s.snapshot()
+            ep = self.epoch
 
             def work() -> tuple[bool, str]:
                 return deps.install(gpu, cfg["proxy_mode"], cfg["proxy_url"],
-                                    on_line=lambda line: self.app.call_soon(
-                                        lambda: install_log.winfo_exists() and install_log.configure(text=line)))
+                                    on_line=lambda line: self.ui(lambda: install_log.configure(text=line), ep))
+
+            def finished(_res: Any) -> None:     # also when the window was closed meanwhile
+                self.jobs.discard("live_install")
+                self.app.recheck_live_deps()
 
             def done(res: Any) -> None:
-                busy["install"] = False
-                self.app.recheck_live_deps()
                 if isinstance(res, Exception):
                     res = (False, str(res))
                 ok, msg = res
                 install_log.configure(text=t("lv_install_ok") if ok else t("lv_install_fail", err=msg[:300]))
                 refresh()
 
-            self._run_bg(work, done)
+            self._run_bg(work, done, after=finished)
 
         install_btn = k.button(acts, t("lv_install"), install, kind="primary", icon="import")
         install_btn.pack(side=k.start)
+        if "live_install" in self.jobs:
+            install_log.configure(text=t("lv_installing"))
         ctk.CTkCheckBox(acts, text=t("lv_gpu"), variable=gpu_var, font=k.font("body"), fg_color=T.ACCENT,
                         hover_color=T.ACCENT_HOVER, border_color=T.BORDER_STRONG,
                         text_color=T.TEXT_PRIMARY).pack(side=k.start, padx=12)
@@ -873,6 +917,36 @@ class SettingsWindow:
                                             help=t("lv_enabled_hint")))
         self.watch("live_when_no_lyrics", k.switch(g, t("lv_no_lyrics"), *self.bind_key("live_when_no_lyrics")))
         g = k.group(f, t("lv_group_model"))
+        self.watch("live_engine", k.option(g, t("lv_engine"), [("auto", t("lv_engine_auto")),
+                                                                ("live_captions", t("lv_engine_lc")),
+                                                                ("whisper", t("lv_engine_whisper"))],
+                                           *self.bind_key("live_engine"), help=t("lv_engine_hint"), width=280))
+        engine_status = k.label(g, "", "caption", T.TEXT_SECONDARY, wrap=560)
+        engine_status.pack(fill="x", pady=(T.SPACE[2], 0))
+
+        def refresh_engine() -> None:
+            if not engine_status.winfo_exists():
+                return
+            av = wincaptions.availability(force=True)
+            lines = [t("lv_lc_ready", langs=", ".join(av.languages)) if av.ok else t("lv_lc_" + av.reason)]
+            eng = self.app.live
+            if eng.running and eng.engine:
+                lines.append(t("lv_engine_now", engine=t("lv_engine_lc") if eng.engine == "live_captions"
+                               else t("lv_engine_whisper")))
+            if eng.lc_note:
+                lines.append(t("lv_lc_failed", err=eng.lc_note))
+            if eng.running and eng.engine == "whisper" and eng.capture_mode:
+                lines.append(t("lv_cap_now_app", what=t(f"lv_cap_{eng.capture_mode}")))
+            if eng.capture_note:
+                lines.append(t("lv_cap_fallback", err=eng.capture_note[:120]))
+            engine_status.configure(text="\n".join(lines))
+
+        self.watch("live_engine", refresh_engine)
+        self.watch("live_capture", k.option(g, t("lv_capture"), [(c, t(f"lv_cap_{c}")) for c in
+                                                                 ("all_except_dualyrics", "app", "system")],
+                                            *self.bind_key("live_capture"), help=t("lv_capture_hint"), width=280))
+        self.watch("live_capture", refresh_engine)
+        refresh_engine()
         self.watch("live_model", k.option(g, t("lv_model"),
                                           [(m, f"{m} — {models.MODELS[m].size_mb} MB · {t('lv_model_' + m)}")
                                            for m in models.SIZES], *self.bind_key("live_model"), width=320))
@@ -926,6 +1000,15 @@ class SettingsWindow:
         self.watch("live_min_display", k.slider(g, t("lv_min_display"), 0.5, 6, *self.bind_key("live_min_display"),
                                                 0.5, "s"))
         self.watch("live_context_lines", k.slider(g, t("lv_context"), 0, 12, *self.bind_key("live_context_lines"), 1))
+        self.watch("live_vad", k.segmented(g, t("lv_vad_kind"), [("auto", t("lv_dev_auto_short")),
+                                                                 ("silero", "Silero"), ("energy", t("lv_vad_energy"))],
+                                           *self.bind_key("live_vad"),
+                                           help=t("lv_vad_kind_hint") if silero.available()
+                                           else t("lv_vad_no_silero")))
+        self.watch("live_interim", k.switch(g, t("lv_interim"), *self.bind_key("live_interim"),
+                                            help=t("lv_interim_hint")))
+        self.watch("live_interim_preview", k.switch(g, t("lv_interim_preview"), *self.bind_key("live_interim_preview"),
+                                                    help=t("lv_interim_preview_hint"), indent=True))
         g = k.group(f, t("lv_group_transcripts"))
         self.watch("live_save_transcripts", k.switch(g, t("lv_transcripts"), *self.bind_key("live_save_transcripts")))
         acts = k.actions(g)
@@ -1005,6 +1088,10 @@ class SettingsWindow:
         k.button(acts, t("reset_models"), lambda: self.s.update(gemini_models=list(settings_mod.DEFAULT_MODELS))
                  ).pack(side=k.start, padx=8)
         result.pack(fill="x", pady=(T.SPACE[3], 0))
+        from dualyrics.ui import keys_page   # v2.2: per-key state and switches, the offline translator
+
+        keys_page.build_keys(self, g)
+        keys_page.build_offline(self, f)
 
         g = k.group(f, t("style"), t("style_hint"))
         style = k.textbox(g, self.s["style"], height=110)

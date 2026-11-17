@@ -78,6 +78,8 @@ Name: "startup"; Description: "{cm:StartWithWindows}"; GroupDescription: "{cm:St
 [Files]
 Source: "..\dist\{#AppExe}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
+Source: "..\NOTICE"; DestDir: "{app}"; DestName: "NOTICE.txt"; Flags: ignoreversion
+Source: "..\LICENSES\*.txt"; DestDir: "{app}\LICENSES"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"; Comment: "{cm:AppComment}"; AppUserModelID: "Dualyrics"

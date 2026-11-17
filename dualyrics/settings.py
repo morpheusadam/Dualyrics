@@ -42,6 +42,10 @@ UI_LANGUAGES = ("en", "fa")
 MODES = ("auto", "lyrics", "live")
 LIVE_DEVICES = ("auto", "cpu", "gpu")
 LIVE_SIZES = ("tiny", "base", "small", "medium")
+LIVE_ENGINES = ("auto", "live_captions", "whisper")   # live/wincaptions.py
+LIVE_VADS = ("auto", "silero", "energy")               # live/vad.py
+LIVE_CAPTURES = ("system", "app", "all_except_dualyrics")   # live/capture.py
+DUB_GENDERS = ("female", "male")                        # dub/voices.py
 UI_THEMES = ("system", "dark", "light")
 DESKTOP_MODES = ("all", "current")
 BACKDROPS = ("dark", "bright", "game", "checker")
@@ -52,6 +56,7 @@ _TEMPLATE_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{1,39}$")
 _COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
 _PROXY = re.compile(r"^(https?|socks5h?|socks4a?)://[^\s/]+(:\d{1,5})?/?$", re.I)
 _MODEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
+_FINGERPRINT = re.compile(r"^[0-9a-f]{12}$")
 _LANG_TAG = re.compile(r"^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8}){0,3}$")
 _UIA_CLASS = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9_ .-]{1,79}$")
 
@@ -76,6 +81,8 @@ def defaults() -> dict[str, Any]:
         "gemini_keys": [],
         "gemini_models": list(DEFAULT_MODELS),
         "fallback_free": True,
+        "gemini_keys_off": [],            # v2.2: fingerprints of keys switched off (dualyrics/keypool.py)
+        "offline_enabled": True,          # v2.2: offline translator as the last tier (dualyrics/offline.py)
         "style": DEFAULT_STYLE,
         "skip_same_language": True,
         # appearance
@@ -139,6 +146,13 @@ def defaults() -> dict[str, Any]:
         "live_context_lines": 4,
         "live_save_transcripts": False,
         "hotkey_live_pause": "ctrl+alt+p",
+        # v2.2: speech engine (Windows Live Captions or Whisper), Silero VAD, interim commits
+        "live_engine": "auto",
+        "live_vad": "auto",
+        "live_interim": True,
+        "live_interim_preview": True,
+        # v2.2: what Live records: everything, the active app (process loopback) or everything but our own voice
+        "live_capture": "all_except_dualyrics",
         # v2: templates, overlay window, monitors, settings window
         "template": DEFAULT_TEMPLATE,
         "template_chosen": False,       # the user picked a look (a later default change leaves it alone)
@@ -181,6 +195,7 @@ def defaults() -> dict[str, Any]:
         "dub_gemini_tts_model": "auto",
         "dub_gemini_live_model": "auto",
         "hotkey_dub": "ctrl+alt+d",
+        "dub_gender": {},                 # v2.2: target language -> female / male (voices.DEFAULT_GENDER otherwise)
         # v2.1: local control API for AI assistants (Settings > AI & API; dualyrics/api.py, 127.0.0.1 + token)
         "api_enabled": True,
     }
@@ -282,6 +297,9 @@ def validate(raw: Any) -> dict[str, Any]:
     s["gemini_models"] = [m for m in _str_list(r.get("gemini_models"), d["gemini_models"], max_items=20)
                           if _MODEL.match(m)] or list(DEFAULT_MODELS)
     s["fallback_free"] = _bool(r.get("fallback_free"), d["fallback_free"])
+    s["gemini_keys_off"] = [x for x in _str_list(r.get("gemini_keys_off"), [], max_items=20, lower=True)
+                            if _FINGERPRINT.match(x)]
+    s["offline_enabled"] = _bool(r.get("offline_enabled"), d["offline_enabled"])
     s["style"] = _str(r.get("style"), d["style"]).strip() or d["style"]
     s["skip_same_language"] = _bool(r.get("skip_same_language"), d["skip_same_language"])
 
@@ -322,8 +340,12 @@ def validate(raw: Any) -> dict[str, Any]:
     s["profile_activation"] = _choice(r.get("profile_activation"), d["profile_activation"],
                                       profiles_mod.GLOBAL_ACTIVATIONS)
     s["profiles"] = profiles_mod.validate_profiles(r.get("profiles"), lang_codes)
-    for k in ("live_enabled", "live_when_no_lyrics", "live_english_only", "live_save_transcripts"):
+    for k in ("live_enabled", "live_when_no_lyrics", "live_english_only", "live_save_transcripts", "live_interim",
+              "live_interim_preview"):
         s[k] = _bool(r.get(k), d[k])
+    s["live_engine"] = _choice(r.get("live_engine"), d["live_engine"], LIVE_ENGINES)
+    s["live_vad"] = _choice(r.get("live_vad"), d["live_vad"], LIVE_VADS)
+    s["live_capture"] = _choice(r.get("live_capture"), d["live_capture"], LIVE_CAPTURES)
     s["live_model"] = _choice(r.get("live_model"), d["live_model"], LIVE_SIZES)
     s["live_source_language"] = _choice(r.get("live_source_language"), d["live_source_language"],
                                         ["auto"] + lang_codes)
@@ -376,6 +398,9 @@ def validate(raw: Any) -> dict[str, Any]:
         m = r.get(k)
         s[k] = m if isinstance(m, str) and (m == "auto" or _MODEL.match(m)) else "auto"
     s["hotkey_dub"] = _hotkey(r.get("hotkey_dub"), d["hotkey_dub"])
+    g = r.get("dub_gender")
+    s["dub_gender"] = {k: v for k, v in list(g.items())[:200] if isinstance(k, str) and re.match(
+        r"^[a-z]{2,3}$", k) and v in DUB_GENDERS} if isinstance(g, dict) else {}
     s["api_enabled"] = _bool(r.get("api_enabled"), d["api_enabled"])
     return s
 
@@ -384,7 +409,10 @@ def migrate_template_default(raw: dict[str, Any]) -> dict[str, Any]:
     """Settings saved before v2.1 have no ``template_chosen``: whoever still has the v2.0 default look (Cinema)
     never chose a template (v2.0 could not tell a picked Cinema from the default), so they get the new default,
     Liquid Glass. Any other look (a preset, a user template, the migrated v1 look) is kept. v1 files (no
-    ``template`` key) are left to the v1 migration in the app."""
+    ``template`` key) are left to the v1 migration in the app. Settings that say the look was never chosen
+    (``template_chosen`` false) always get the current default."""
+    if raw and raw.get("template_chosen") is False and "template" in raw and raw.get("template") != DEFAULT_TEMPLATE:
+        return dict(raw, template=DEFAULT_TEMPLATE)
     if not raw or "template_chosen" in raw or "template" not in raw:
         return raw
     out = dict(raw)

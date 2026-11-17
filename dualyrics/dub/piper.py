@@ -41,8 +41,13 @@ def voice_file(path: str) -> Path:
     return root() / "voices" / (path.rsplit("/", 1)[-1] + ".onnx")
 
 
+def _unpacking_marker() -> Path:
+    return root() / ".unpacking"
+
+
 def installed() -> bool:
-    return exe().is_file()
+    """piper.exe is there and its archive was unpacked to the end (a stopped unpack leaves the marker)."""
+    return exe().is_file() and not _unpacking_marker().exists() and (exe().parent / "espeak-ng-data").is_dir()
 
 
 def voice_installed(path: str) -> bool:
@@ -52,20 +57,13 @@ def voice_installed(path: str) -> bool:
 
 def _fetch(session: Any, url: str, dest: Path, progress: Callable[[int, int], None],
            cancelled: Callable[[], bool]) -> None:
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    part = dest.with_name(dest.name + ".part")
-    with session.get(url, stream=True, timeout=(10, 60)) as r:
-        r.raise_for_status()
-        total = int(r.headers.get("content-length") or 0)
-        done = 0
-        with open(part, "wb") as f:
-            for chunk in r.iter_content(256 * 1024):
-                if cancelled():
-                    raise PiperError("cancelled")
-                f.write(chunk)
-                done += len(chunk)
-                progress(done, total)
-    part.replace(dest)
+    """Resumable download (dualyrics/download.py): a broken connection continues where it stopped."""
+    from dualyrics import download
+
+    try:
+        download.fetch(session, url, dest, progress, cancelled)
+    except download.DownloadCancelled:
+        raise PiperError("cancelled") from None
 
 
 def _safe_extract(zf: zipfile.ZipFile, target: Path) -> None:
@@ -84,9 +82,14 @@ def install(session: Any, voice_path: str, progress: Callable[[int, int], None] 
         if not installed():
             z = root() / "piper_windows_amd64.zip"
             _fetch(session, PIPER_ZIP, z, progress, cancelled)
+            mark = _unpacking_marker()
+            mark.write_text("unpacking", encoding="utf-8")
             try:
+                if not zipfile.is_zipfile(z):
+                    raise PiperError("the Piper download is damaged")
                 with zipfile.ZipFile(z) as zf:
                     _safe_extract(zf, root())
+                mark.unlink(missing_ok=True)
             finally:
                 z.unlink(missing_ok=True)
             if not installed():

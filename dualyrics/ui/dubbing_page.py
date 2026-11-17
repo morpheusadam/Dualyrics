@@ -87,6 +87,28 @@ def build(win: "SettingsWindow", f: Any) -> None:
     win.watch("dub_voice", k.option(g, t("dp_voice"), [(v, t("dp_voice_auto") if v == "auto" else v) for v in names],
                                     *win.bind_key("dub_voice"), help=t("dp_voice_hint", lang=_lang_name(target)),
                                     width=300))
+    lg = voices.base_lang(target)
+
+    def cur_gender() -> str:
+        return voices.gender_for({"dub_gender": s["dub_gender"]}, target)
+
+    def gender_label(gender: str) -> str:
+        name = voices.short_name(voices.auto_voice(eng, target, gender))
+        word = t(f"dp_gender_{gender}")
+        return f"{word} · {name}" if name else word
+
+    def set_gender(v: str) -> None:
+        before = voices.piper_voice(s["dub_voice"], target, cur_gender())
+        genders = dict(s["dub_gender"])
+        genders[lg] = v
+        s.update(dub_gender=genders)
+        if voices.piper_voice(s["dub_voice"], target, v) != before:
+            win.select("dubbing")            # the Piper download row below is for the other voice now
+
+    win.watch("dub_gender", k.segmented(g, t("dp_gender", lang=_lang_name(target)),
+                                        [(gd, gender_label(gd)) for gd in voices.GENDERS],
+                                        cur_gender, set_gender,
+                                        help=t("dp_gender_hint")))
     win.watch("dub_speed", k.slider(g, t("dp_speed"), 0.5, 2.0, *win.bind_key("dub_speed"), 0.05, "×",
                                     fmt=lambda v: f"{v:.2f}"))
     win.watch("dub_volume", k.slider(g, t("dp_volume"), 0, 100, *win.bind_key("dub_volume"), 1, "%"))
@@ -144,13 +166,14 @@ def build(win: "SettingsWindow", f: Any) -> None:
             busy["edge"] = True
             edge_log.configure(text=t("dp_installing"))
             cfg = s.snapshot()
+            ep = win.epoch
 
             def work() -> tuple[bool, str]:
                 from dualyrics.live import deps
 
                 return deps.install(False, cfg["proxy_mode"], cfg["proxy_url"], packages={
-                    edge.PACKAGE: edge.REQUIREMENT}, on_line=lambda line: win.app.call_soon(
-                        lambda: edge_log.winfo_exists() and edge_log.configure(text=line)))
+                    edge.PACKAGE: edge.REQUIREMENT}, on_line=lambda line: win.ui(
+                        lambda: edge_log.configure(text=line), ep))
 
             def done(res: Any) -> None:
                 busy["edge"] = False
@@ -166,7 +189,7 @@ def build(win: "SettingsWindow", f: Any) -> None:
         k.button(row, t("dp_install"), install_edge, icon="import").pack(side=k.end)
     edge_log.pack(fill="x")
 
-    voice_path = voices.piper_voice(s["dub_voice"], target)
+    voice_path = voices.piper_voice(s["dub_voice"], target, cur_gender())
     if voice_path is None:
         k.label(g, t("dp_piper_none", lang=_lang_name(target)), "caption", T.TEXT_SECONDARY).pack(
             fill="x", pady=(T.SPACE[3], 0))
@@ -184,11 +207,12 @@ def build(win: "SettingsWindow", f: Any) -> None:
                 return
             busy["piper"] = True
             piper_log.configure(text=t("dp_installing"))
+            ep = win.epoch
 
             def progress(done: int, total: int) -> None:
                 if total:
                     txt = t("dp_progress", done=f"{done / 1e6:.1f}", total=f"{total / 1e6:.1f}")
-                    win.app.call_soon(lambda: piper_log.winfo_exists() and piper_log.configure(text=txt))
+                    win.ui(lambda: piper_log.configure(text=txt), ep)
 
             def work() -> tuple[bool, str]:
                 try:

@@ -292,6 +292,10 @@ from dualyrics.i18n_ai import S as _AI  # noqa: E402 - v2.1 strings (Settings > 
 
 STRINGS.update(_AI)
 
+from dualyrics.i18n_v22 import S as _V22  # noqa: E402 - v2.2 strings (Live: speech engine, VAD, interim)
+
+STRINGS.update(_V22)
+
 
 def set_language(lang: str) -> None:
     global _lang

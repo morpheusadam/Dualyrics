@@ -203,6 +203,18 @@ class CaptionStream:
         self.captions.append(cap)
         return "new", cap
 
+    def revise(self, cap: Caption, r: Recognition, now: float | None = None) -> Caption | None:
+        """The sentence of ``cap`` grew or was corrected (Windows Live Captions updates text in place).
+        Returns the caption, or None when the words did not change."""
+        text = clean(r.text)
+        if not normalize(text):
+            return None
+        if normalize(text) == normalize(cap.text):
+            cap.text = text                # punctuation only: shown, not translated again
+            cap.end = max(cap.end, r.end)
+            return None
+        return self._replace(cap, text, r, r.end if now is None else now)
+
     @staticmethod
     def _replace(cap: Caption, text: str, r: Recognition, now: float) -> Caption:
         cap.text = text
@@ -276,3 +288,4 @@ class LiveView:
     status_kw: dict = field(default_factory=dict)
     caption_id: int = 0
     visible: bool = False
+    preview: str = ""            # dim line: the unconfirmed end of long speech (interim commits)

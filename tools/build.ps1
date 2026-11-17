@@ -5,7 +5,7 @@
 .DESCRIPTION
     Output:
       dist\Dualyrics.exe                         the app (one file, no console window)
-      dist\Dualyrics-<version>-windows-x64.zip   portable: Dualyrics.exe + README.md + LICENSE + CHANGELOG.md
+      dist\Dualyrics-<version>-windows-x64.zip   portable: Dualyrics.exe + README.md + LICENSE + NOTICE + LICENSES\ + CHANGELOG.md
       dist\Dualyrics-Setup-<version>.exe         per-user installer (Inno Setup, installer\Dualyrics.iss)
       dist\SHA256SUMS.txt                        SHA-256 of all of the above
 
@@ -93,7 +93,8 @@ $outputs = @($exe)
 if (-not $NoZip) {
     $zip = Join-Path $root "dist\Dualyrics-$version-windows-x64.zip"
     if (Test-Path $zip) { Remove-Item $zip -Force }
-    $files = @($exe, (Join-Path $root "README.md"), (Join-Path $root "LICENSE"), (Join-Path $root "CHANGELOG.md")) |
+    $files = @($exe, (Join-Path $root "README.md"), (Join-Path $root "LICENSE"), (Join-Path $root "NOTICE"),
+               (Join-Path $root "LICENSES"), (Join-Path $root "CHANGELOG.md")) |
         Where-Object { Test-Path $_ }
     Compress-Archive -Path $files -DestinationPath $zip -CompressionLevel Optimal
     $zipMb = [math]::Round((Get-Item $zip).Length / 1MB, 1)

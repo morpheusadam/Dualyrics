@@ -44,6 +44,7 @@ class UnknownTool(OpError):
 BLOCKED_KEYS: dict[str, str] = {
     "version": "the settings schema version is managed by the app",
     "gemini_keys": "API keys are entered by the user in Settings > Translation; assistants never see or change them",
+    "gemini_keys_off": "which API keys are switched on is set by the user in Settings > Translation",
     "profiles": "use list_profiles, upsert_profile and delete_profile to change app profiles",
     "api_enabled": "only the user switches the AI control API on or off (Settings > AI & API)",
 }
@@ -203,6 +204,7 @@ def public_settings(snap: dict[str, Any]) -> dict[str, Any]:
     """Settings as an assistant may see them: no API keys (only how many), no proxy password."""
     s = copy.deepcopy(snap)
     s["gemini_keys_count"] = len(s.pop("gemini_keys", []) or [])
+    s.pop("gemini_keys_off", None)
     if s.get("proxy_url"):
         s["proxy_url"] = re.sub(r"//[^/@\s]*@", "//***@", s["proxy_url"])
     return s

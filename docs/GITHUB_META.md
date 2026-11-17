@@ -41,17 +41,23 @@ Upload `docs/social-preview.png` (1280 x 640) in **Settings › General › Soci
 | Features › Wiki, Projects | Off | Everything lives in the README and `docs/` |
 | Security › Private vulnerability reporting | On | `SECURITY.md` points reporters to it |
 | Labels | `bug`, `enhancement`, `translation`, `good first issue`, `help wanted` | Used by the issue forms and `docs/GOOD_FIRST_ISSUES.md` |
-| Releases | Tag `v2.1.0`; the release workflow attaches the exe, zip, Setup and `SHA256SUMS.txt` | The README badges and download links point at the latest release |
+| Releases | Tag `v2.2.0`; the release workflow attaches the exe, zip, Setup and `SHA256SUMS.txt` | The README badges and download links point at the latest release |
 | Pinned issue | "Linux version: star the repo to vote (review on 2026-12-17)" | Turns the roadmap promise into a visible counter |
 
-## Release title and summary (v2.1.0)
+## Release title and summary (v2.2.0)
+
+```
+Dualyrics 2.2.0: Live Captions engine, faster subtitles, offline translator, multi-key Gemini, per-app audio
+```
+
+The release workflow takes the notes from the `## [2.2.0]` section of `CHANGELOG.md`. A short summary to put above them:
+
+```
+Live mode can now use Windows 11 Live Captions (hidden in the background) instead of Whisper, and with Whisper it cuts speech with Silero VAD and captions long speech sentence by sentence. It can listen to one app only, or to everything except Dualyrics. Several Gemini keys take turns, and keys from different Google Cloud projects add up their free quota. When every online translator fails, an optional offline translator (Argos Translate models) takes over. Repeated subtitles reuse their translation, and dubbing has a female or male voice per language.
+```
+
+### v2.1.0
 
 ```
 Dualyrics 2.1.0: smart sources, any language, dubbing, usage meter, Liquid Glass, MCP
-```
-
-The release workflow takes the notes from the `## [2.1.0]` section of `CHANGELOG.md`. A short summary to put above them:
-
-```
-Dualyrics now reads the subtitles an app already shows (YouTube captions, film and game subtitles through Windows OCR) before it listens to the audio, translates any language through English into your own, can read translations aloud (off by default), counts your Gemini usage against the free-tier limits, has a real-blur Liquid Glass look and an MCP server for Claude and other AI assistants.
 ```

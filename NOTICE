@@ -1,0 +1,135 @@
+Dualyrics
+Copyright (c) 2026 morpheusadam and Dualyrics contributors
+Licensed under the MIT License (see LICENSE).
+
+Dualyrics contains code ported from, or written after, the open-source projects
+listed below. Only projects under the MIT, BSD or Apache-2.0 licences were used
+as code sources; each keeps its own copyright and licence. The full licence
+texts are in the LICENSES folder: LICENSES/MIT.txt (the MIT terms, which apply
+with the copyright line given for each project) and LICENSES/Apache-2.0.txt.
+None of the Apache-2.0 projects below ships a NOTICE file of its own.
+Per-file details: docs/ATTRIBUTION_NOTES.md.
+
+
+1. Code and rules ported into Dualyrics
+---------------------------------------
+
+LiveTranslate
+  https://github.com/TheDeathDragon/LiveTranslate
+  MIT License, Copyright (c) 2025 Shiro
+  Used: the speech segmentation rules of vad_processor.py (VADProcessor) and the
+  interim-commit rules of main.py (_do_interim_asr, _strip_committed_overlap,
+  _is_short_utterance), rewritten without numpy/torch; the idea of
+  model_manager.py (_hf_repo_complete) for checking that a download is complete.
+  In: dualyrics/live/vad.py, dualyrics/live/interim.py, dualyrics/live/engine.py,
+  dualyrics/live/models.py, dualyrics/dub/piper.py, dualyrics/live/deps.py
+
+Silero VAD
+  https://github.com/snakers4/silero-vad
+  MIT License, Copyright (c) 2020-present Silero Team
+  Used: the streaming call of the ONNX model (512-sample windows at 16 kHz,
+  64 samples of context, recurrent state carried over). The model file itself
+  is not bundled; it is loaded from the faster-whisper package when installed.
+  In: dualyrics/live/silero.py
+
+faster-whisper
+  https://github.com/SYSTRAN/faster-whisper
+  MIT License, Copyright (c) 2023 SYSTRAN
+  Used: the location of the bundled Silero model (faster_whisper/assets), its
+  h/c inputs and the ONNX Runtime session options of faster_whisper/vad.py.
+  faster-whisper is also the optional speech recogniser of Live mode
+  (downloaded by the user, not bundled).
+  In: dualyrics/live/silero.py
+
+LiveCaptions-Translator
+  https://github.com/SakiRinn/LiveCaptions-Translator
+  Apache License 2.0, Copyright 2024 SakiRinn and other contributors
+  Used (behaviour re-implemented in Python, no source text copied):
+  src/utils/LiveCaptionsHandler.cs (starting and hiding Live Captions, the
+  LiveCaptionsDesktopWindow / CaptionsTextBlock lookup, recovery), the sync loop
+  of src/Translator.cs (25 ms polling, sentence end, idle and change counters)
+  and src/models/TranslationTaskQueue.cs (dropping stale translations).
+  Changed: a Live Captions window the user opened is left alone, window style
+  and position are restored on close, one caption is updated in place, and
+  Live mode falls back to Whisper by itself.
+  In: dualyrics/live/wincaptions.py, dualyrics/live/engine.py
+
+LiveCaptions-Translator-Buddy
+  https://github.com/MuuCake/LiveCaptions-Translator-Buddy
+  MIT License, Copyright (c) 2026 kidoyuyu
+  Used: confirmation that the Live Captions text can be read from Python with
+  comtypes UI Automation (no code copied).
+  In: dualyrics/live/wincaptions.py
+
+Translumo
+  https://github.com/ramjke/Translumo
+  Apache License 2.0 (the upstream LICENSE names no copyright holder;
+  copyright of the Translumo authors)
+  Used: ported to Python from
+  src/Translumo.Processing/TextProcessing/TextResultCacheService.cs and
+  src/Translumo.Utils/Extensions/StringExtensions.cs: Jaro and Sorensen-Dice
+  similarity, the near-duplicate cache rules and their constants.
+  Changed: OCR readings score by their number of letters, UI Automation
+  readings count as trusted, and a repeated line reuses its earlier
+  translation (see the header of dualyrics/screen/dedupe.py).
+  In: dualyrics/screen/dedupe.py, dualyrics/screen/engine.py,
+  dualyrics/live/engine.py
+
+Argos Translate
+  https://github.com/argosopentech/argos-translate
+  MIT License, Copyright (c) 2020 Argos Open Technologies, LLC
+  Used: the .argosmodel package layout and metadata fields
+  (argostranslate/package.py), the argospm-index format, and the CTranslate2 /
+  SentencePiece translation call (argostranslate/translate.py,
+  argostranslate/tokenizer.py), rewritten without the argostranslate package.
+  The language models are downloaded by the user and keep their own licences.
+  In: dualyrics/offline.py, dualyrics/ui/keys_page.py
+
+dota-live-translator
+  https://github.com/fr0styJS/dota-live-translator
+  MIT License, Copyright (c) 2026 Fr0styDev
+  Used: ported from backend/procloop.py: the ctypes/comtypes declarations and
+  the call sequence of WASAPI process loopback capture
+  (ActivateAudioInterfaceAsync, IAudioClient, IAudioCaptureClient).
+  Changed: exclude mode for Dualyrics' own process, 16 kHz mono with a 48 kHz
+  fallback, a stateful resampler, process-exit check, one error type for the
+  fallback to system loopback.
+  In: dualyrics/live/procloop.py, dualyrics/live/capture.py
+
+Windows classic samples (ApplicationLoopback)
+  https://github.com/microsoft/Windows-classic-samples
+  MIT License, Copyright (c) Microsoft Corporation
+  Used: the documented activation sequence of Samples/ApplicationLoopback,
+  which the port above follows (no code copied directly).
+  In: dualyrics/live/procloop.py
+
+
+2. Bundled in Dualyrics.exe (used as libraries, not modified)
+-------------------------------------------------------------
+
+pyminiaudio      https://github.com/irmen/pyminiaudio
+                 MIT License. Python bindings Copyright (c) 2019 Irmen de Jong;
+                 miniaudio Copyright 2019 David Reid; stb_vorbis Copyright (c)
+                 2017 Sean Barrett. (miniaudio and dr_mp3 are also available
+                 as public domain or MIT-0.)
+Requests         https://github.com/psf/requests, Apache License 2.0
+                 NOTICE of Requests: "Requests / Copyright 2019 Kenneth Reitz"
+urllib3 (MIT), charset-normalizer (MIT), idna (BSD-3-Clause), certifi (MPL-2.0),
+PySocks (BSD), CustomTkinter (MIT), darkdetect (BSD-3-Clause),
+pystray (LGPL-3.0), Pillow (MIT-CMU), PyWinRT / winrt-* (MIT), comtypes (MIT).
+Each package's own licence file applies. The Vazirmatn font
+(https://github.com/rastikerdar/vazirmatn) is bundled under the SIL Open Font
+License 1.1.
+
+Downloaded on request and not bundled: faster-whisper, CTranslate2, ONNX
+Runtime and the Silero model, PyAudioWPatch, numpy, edge-tts, Piper and its
+voices, SentencePiece, the Whisper models and the Argos Translate language
+packages. Each comes with, and keeps, its own licence.
+
+
+3. Ideas only (no code used)
+----------------------------
+
+ufal/whisper_streaming, collabora/WhisperLive, QuentinFuxa/WhisperLiveKit,
+KoljaB/RealtimeSTT (real-time Whisper pipelines) and yuxino/Mimi (per-process
+capture for captions).

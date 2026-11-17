@@ -219,3 +219,15 @@ def test_reader_retranslates_an_updated_caption_and_keeps_its_id():
             ids.add(v.caption_id)
     assert tr.seen == [a, b, c] and len(ids) == 1
     assert r.view(now=3.0).translation == f"[fa] {c}"
+
+
+def test_reused_translations_are_dropped_when_the_target_language_changes():
+    cfg = {**S.defaults(), "target_language": "fa"}
+    r, _state, _ocr, _tr = make_reader([frame("")], {}, cfg)
+    r.step(0.0)
+    r._memo.append(("Hello there", "Hello there", "[fa] Hello there", "", "done"))
+    r.step(0.3)
+    assert r._memo_lookup("Hello there") is not None
+    cfg["target_language"] = "de"
+    r.step(0.6)
+    assert r._memo_lookup("Hello there") is None

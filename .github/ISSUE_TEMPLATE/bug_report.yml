@@ -12,7 +12,7 @@ body:
     attributes:
       label: Dualyrics version
       description: Settings > About shows it.
-      placeholder: "2.1.0"
+      placeholder: "2.2.0"
     validations:
       required: true
   - type: dropdown

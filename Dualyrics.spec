@@ -37,7 +37,9 @@ version_info = VSVersionInfo(
 
 datas = [(str(ROOT / "dualyrics" / "assets"), "dualyrics/assets"),   # icon, Vazirmatn (OFL), ctk theme
          (str(ROOT / "dualyrics" / "templates" / "builtin"), "dualyrics/templates/builtin"),
-         (str(ROOT / "dualyrics" / "templates" / "schema.json"), "dualyrics/templates")]
+         (str(ROOT / "dualyrics" / "templates" / "schema.json"), "dualyrics/templates"),
+         # third-party notices travel with the exe itself (ported MIT / Apache-2.0 code, bundled libraries)
+         (str(ROOT / "LICENSE"), "."), (str(ROOT / "NOTICE"), "."), (str(ROOT / "LICENSES"), "LICENSES")]
 datas += collect_data_files("customtkinter")  # themes (json) and fonts
 
 hiddenimports = [
@@ -52,6 +54,9 @@ hiddenimports = [
     "winrt.windows.graphics.imaging",
     "winrt.windows.globalization",
     "socks",
+    # v2.2 dubbing: MP3 decoding without Media Foundation (dr_mp3 through pyminiaudio, a cffi extension)
+    "miniaudio",
+    "_cffi_backend",
 ]
 try:
     import comtypes.client

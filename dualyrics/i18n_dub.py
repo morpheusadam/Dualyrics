@@ -168,7 +168,7 @@ S: dict[str, dict[str, str]] = {
     "us_reset_done": {"en": "Usage history deleted.", "fa": "تاریخچه‌ی مصرف پاک شد."},
 
     # ---- About: GitHub, tray
-    "tray_github": {"en": "Dualyrics on GitHub", "fa": "Dualyrics در GitHub"},
+    "tray_github": {"en": "GitHub / Star", "fa": "GitHub / ستاره"},
     "about_github": {"en": "GitHub", "fa": "GitHub"},
     "about_github_hint": {"en": "Dualyrics is open source. A star helps other people find it.",
                           "fa": "Dualyrics متن‌باز است. یک ستاره کمک می‌کند دیگران هم پیدایش کنند."},

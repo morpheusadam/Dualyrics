@@ -5,7 +5,10 @@ One worker thread samples the target window a few times a second (setting ``ocr_
 1. for browsers, caption elements through UI Automation (exact text, no OCR errors);
 2. else OCR of the subtitle region (Windows.Media.Ocr), only when the region really changed;
 3. the readings go through ``SubtitleTracker`` (stable-text debounce, dedupe, app labels ignored);
-4. every new line is translated (English pivot for other languages, see ``live/pivot.py``).
+4. a line that repeats a recent reading (``screen/dedupe.py``, Translumo's rules: Jaro/Dice similarity, 3 s
+   cache) gets the translation it had, without a request; a new translation that differs from the shown one in
+   a character or two does not replace it (no flicker);
+5. every new line is translated (English pivot for other languages, see ``live/pivot.py``).
 
 The Tk thread calls ``start(target)`` / ``stop()`` / ``has_text()`` / ``view()``. ``step()`` is one sample and
 takes its readers from factories, so the whole loop is unit-tested with fake frames.
@@ -16,6 +19,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -23,6 +27,7 @@ from typing import Any, Callable
 from dualyrics import sources as sources_mod
 from dualyrics.live import pivot
 from dualyrics.live.text import ContextWindow, LiveView
+from dualyrics.screen import dedupe
 from dualyrics.screen.logic import ChangeDetector, StaticLines, SubtitleTracker, similar
 from dualyrics.translate import TranslationError
 
@@ -30,6 +35,13 @@ log = logging.getLogger(__name__)
 
 LINGER = 0.4          # a line stays this long after it left the screen ...
 UIA_TRUST = 15.0      # ... caption elements that gave text this recently are trusted even when empty (no OCR)
+MEMO = 20             # recent lines and their translations (reused for a repeated reading)
+MEMO_KEYS = ("target_language", "pivot_english", "pivot_show_original", "provider", "style", "skip_same_language")
+
+
+def memo_key(cfg: dict[str, Any]) -> tuple[Any, ...]:
+    """The settings a reused translation must have been made with."""
+    return tuple(str(cfg.get(k)) for k in MEMO_KEYS)
 
 
 @dataclass(frozen=True)
@@ -113,6 +125,11 @@ class ScreenReader:
         self._ocr_failed_at = -1e9
         self._ocr_lines: list[str] = []
         self.static = StaticLines()
+        self._now = 0.0
+        self.dedupe = dedupe.TextResultCache(clock=lambda: self._now)
+        self._memo: deque[tuple[str, str, str, str, str]] = deque(maxlen=MEMO)  # text, top, translation, extra, state
+        self._memo_for: tuple[Any, ...] = ()   # the settings the memo's translations were made with
+        self.reused = 0                       # translations reused for repeated readings (no request)
         self._async = translate_async
         self._tx = ThreadPoolExecutor(max_workers=2, thread_name_prefix="screen-tr") if translate_async else None
 
@@ -236,7 +253,17 @@ class ScreenReader:
         # lines that never change (HUD legends, logos, menu titles) are not subtitles
         return " ".join(self.static.feed(self._ocr_lines, now)), False
 
+    def _memo_lookup(self, text: str) -> tuple[str, str, str, str, str] | None:
+        with self._lock:
+            best = None
+            for m in self._memo:
+                sim = 1.0 if m[0] == text else dedupe.similarity(m[0], text)
+                if sim > dedupe.UPPER_SIMILARITY_THRESHOLD and (best is None or sim > best[0]):
+                    best = (sim, m)
+        return best[1] if best else None
+
     def step(self, now: float) -> None:
+        self._now = now
         target = self._target
         if target is None or not target.hwnd:
             return
@@ -248,9 +275,16 @@ class ScreenReader:
             self._ocr_lines = []
             self.static.reset()
             self._uia_text_at = -1e9
+            self.dedupe.reset()
             with self._lock:
                 self._cap = None
+                self._memo.clear()
         cfg = self.get_cfg()
+        mk = memo_key(cfg)
+        with self._lock:
+            if mk != self._memo_for:          # another target language or pivot: earlier translations do not fit
+                self._memo_for = mk
+                self._memo.clear()
         text, trusted = self.read_once(target, cfg, now)
         if text is None:
             return
@@ -262,6 +296,12 @@ class ScreenReader:
         ev = self.tracker.feed(text, now, trusted)
         if ev is None:
             return
+        reuse = None
+        if ev.kind in ("show", "update") and ev.text:
+            repeated, _it = self.dedupe.is_cached(ev.text, dedupe.TRUSTED if trusted else dedupe.letters(ev.text))
+            self.dedupe.end_iteration()
+            if repeated:
+                reuse = self._memo_lookup(ev.text)
         with self._lock:
             if ev.kind == "clear":
                 if self._cap is not None and self._cap.gone_at is None:
@@ -279,6 +319,11 @@ class ScreenReader:
                 cap = ScreenCaption(self._next_id, ev.text, now, top=ev.text, via="uia" if trusted else "ocr")
                 self._next_id += 1
                 self._cap = cap
+            if reuse is not None and reuse[4] in ("done", "skipped"):
+                # the same line read again (a flicker, a repeated subtitle): its translation, no request
+                _t, cap.top, cap.translation, cap.extra, cap.trans_state = reuse
+                self.reused += 1
+                return
         if cfg.get("show_translation", True):
             self._translate(cap, cfg, target)
         else:
@@ -289,6 +334,7 @@ class ScreenReader:
         self.context.resize(cfg.get("live_context_lines", 4))
         ctx = self.context.pairs()
         version, text = cap.version, cap.text
+        mk = memo_key(cfg)
 
         def work() -> None:
             try:
@@ -305,8 +351,13 @@ class ScreenReader:
                 if res is None:
                     cap.trans_state = "failed"
                     return
-                cap.top, cap.translation, cap.extra, cap.trans_state = res.top, res.translation, res.extra, res.state
-                self.context.add(res.english or text, res.translation, key=cap.id)
+                shown = cap.translation
+                keep = dedupe.same_translation(shown, res.translation)   # only a character or two changed
+                cap.top, cap.extra, cap.trans_state = res.top, res.extra, res.state
+                cap.translation = shown if keep else res.translation
+                self.context.add(res.english or text, cap.translation, key=cap.id)
+                if res.state in ("done", "skipped") and mk == self._memo_for:
+                    self._memo.append((text, cap.top, cap.translation, cap.extra, res.state))
 
         if self._tx is None:
             work()

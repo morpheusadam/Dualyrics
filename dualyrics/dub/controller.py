@@ -255,7 +255,8 @@ class Dubber:
                 if keys:
                     self.discovery.refresh(keys[0])
                 live.start(self.discovery.live_models(cfg.get("dub_gemini_live_model", "auto")) or models, keys,
-                           voices.gemini_voice(str(cfg.get("dub_voice", "auto"))), feed.lang, feed.where)
+                           voices.gemini_voice(str(cfg.get("dub_voice", "auto")), voices.gender_for(cfg, feed.lang)),
+                           feed.lang, feed.where)
 
             self._pool.submit(start)
             self.last_engine = "gemini_live"
@@ -295,7 +296,7 @@ class Dubber:
                 return
             self._busy.add(key)
         voice = str(cfg.get("dub_voice", "auto"))
-        ck = f"{lang}|{voice}|{rate:.2f}|{text}"
+        ck = f"{lang}|{voice}|{voices.gender_for(cfg, lang)}|{rate:.2f}|{text}"
         hit = self._cache.get(ck)
         if hit is not None:
             self._cache.move_to_end(ck)

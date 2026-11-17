@@ -30,19 +30,19 @@ If Dualyrics helps you understand a song, a video or a game, please **star the r
 
 Dualyrics is a free, open-source Windows 10/11 app that puts a translation under whatever you are listening to, in a small always-on-top subtitle bar. For music it shows time-synced lyrics from [LRCLIB](https://lrclib.net) line by line, with the translation under each line. For YouTube, films and games it reads the subtitles already on screen, or listens to the sound and writes captions with offline speech recognition (Whisper). Speech or text in any language is turned into English first, then into your language, so a Japanese anime, a German game or a Korean song all end up in Persian, Turkish, Spanish or any of 46 target languages. Translation uses Google Gemini with your own free API key, or free Google Translate with no key at all. There is no account, no login and no telemetry.
 
-Contents: [Quick start](#quick-start) · [Free Gemini key](#get-a-free-gemini-api-key) · [Use cases](#what-you-can-use-it-for) · [Smart sources](#how-dualyrics-picks-what-to-show) · [Any language](#any-language-to-english-and-your-language) · [Live mode](#live-mode) · [Templates](#templates) · [Profiles](#per-app-profiles) · [Monitors](#monitors-and-the-overlay) · [Dubbing](#dubbing) · [Usage meter](#gemini-usage-meter) · [AI and MCP](#ai-assistants-and-mcp) · [Privacy](#privacy) · [FAQ](#faq) · [Roadmap](#roadmap) · [Contributing](#contributing)
+Contents: [Quick start](#quick-start) · [Free Gemini key](#get-a-free-gemini-api-key) · [Use cases](#what-you-can-use-it-for) · [Smart sources](#how-dualyrics-picks-what-to-show) · [Any language](#any-language-to-english-and-your-language) · [Offline translator](#offline-translator) · [Live mode](#live-mode) · [Templates](#templates) · [Profiles](#per-app-profiles) · [Monitors](#monitors-and-the-overlay) · [Dubbing](#dubbing) · [Usage meter](#gemini-usage-meter) · [AI and MCP](#ai-assistants-and-mcp) · [Privacy](#privacy) · [FAQ](#faq) · [Roadmap](#roadmap) · [Contributing](#contributing)
 
 ## Quick start
 
-1. Download `Dualyrics-Setup-2.1.0.exe` from the [latest release](https://github.com/morpheusadam/Dualyrics/releases/latest) and run it. Setup is in English or Persian, needs no admin rights and installs for your Windows user only, into `%LOCALAPPDATA%\Programs\Dualyrics`.
+1. Download `Dualyrics-Setup-2.2.0.exe` from the [latest release](https://github.com/morpheusadam/Dualyrics/releases/latest) and run it. Setup is in English or Persian, needs no admin rights and installs for your Windows user only, into `%LOCALAPPDATA%\Programs\Dualyrics`.
 2. Dualyrics starts when Setup finishes, and the settings window opens the first time.
 3. Pick your language in **Settings › General › Translate into**, then play a song on Spotify or a video on YouTube.
 
 That is enough for lyrics and on-screen subtitles. For captions from the sound itself (games and videos without subtitles), add [Live mode](#live-mode) once.
 
-Prefer a portable copy? The release also has `Dualyrics.exe` (one file, no installation) and `Dualyrics-2.1.0-windows-x64.zip`. `SHA256SUMS.txt` lists the checksum of every file. Windows SmartScreen may warn about an unsigned app from a new publisher: choose **More info › Run anyway** if you trust the download, or [build it yourself](#build-from-source).
+Prefer a portable copy? The release also has `Dualyrics.exe` (one file, no installation) and `Dualyrics-2.2.0-windows-x64.zip`. `SHA256SUMS.txt` lists the checksum of every file. Windows SmartScreen may warn about an unsigned app from a new publisher: choose **More info › Run anyway** if you trust the download, or [build it yourself](#build-from-source).
 
-Upgrading keeps your settings: run the new Setup over the old version. Uninstall from **Windows Settings › Apps › Installed apps › Dualyrics**; the uninstaller asks whether to delete your settings too (the default keeps them). For scripts: `Dualyrics-Setup-2.1.0.exe /VERYSILENT /SUPPRESSMSGBOXES /TASKS="desktopicon,startup"`.
+Upgrading keeps your settings: run the new Setup over the old version. Uninstall from **Windows Settings › Apps › Installed apps › Dualyrics**; the uninstaller asks whether to delete your settings too (the default keeps them). For scripts: `Dualyrics-Setup-2.2.0.exe /VERYSILENT /SUPPRESSMSGBOXES /TASKS="desktopicon,startup"`.
 
 ## Get a free Gemini API key
 
@@ -53,7 +53,7 @@ Dualyrics works without any key, through the free Google Translate endpoint. A G
 3. Copy the key (it starts with `AIza`).
 4. In Dualyrics open **Settings › Translation**, set **Translation provider** to **Gemini**, paste the key into the keys box and press **Test**.
 
-The free tier has daily request limits per model, which Google sets and changes from time to time. A song normally costs one request, translations are cached, and songs already in your language are skipped. You can add several keys and models: when one reaches its limit, Dualyrics moves to the next, and with **Use the free translator when Gemini fails** on, it falls back to Google Translate. Keys are encrypted with Windows DPAPI for your Windows user and never leave your PC except in requests to Google. **Settings › Usage** shows how much of each daily limit you have used.
+The free tier has daily request limits per model, which Google sets and changes from time to time. A song normally costs one request, translations are cached (whole songs, and every Live or on-screen line, so a replayed video costs nothing), and songs already in your language are skipped. You can add several keys and models: requests take turns over the keys that are switched on, so no key is used up first, and a key that reached its daily quota rests until the reset (midnight Pacific) without being asked again. **Settings › Translation** shows each key's state, today's requests and tokens, a switch and a **Test** button. Google counts the quota per Cloud project, so keys only add quota when they come from different projects or accounts: for each extra key, pick a new project when you click **Create API key** (or use another Google account). Dualyrics warns when two keys seem to share one project. When every key rests, the free Google translator takes over at once, and when that fails too, the optional offline translator (Argos Translate language models that run on your PC), so subtitles never stop. Keys are encrypted with Windows DPAPI for your Windows user and never leave your PC except in requests to Google. **Settings › Usage** shows how much of each daily limit you have used.
 
 ## What you can use it for
 
@@ -89,6 +89,8 @@ For the app in front of you, Dualyrics uses the lines that app already provides 
 | 2 | On-screen subtitles | YouTube captions, film subtitles, game subtitles | Windows UI Automation for web players in Chrome and Edge, otherwise offline Windows OCR of the subtitle area, 1 to 6 times a second |
 | 3 | Audio (Live mode) | Anything without lyrics or subtitles | Speaker audio cut at pauses, recognised offline with Whisper |
 
+A subtitle that OCR or UI Automation reads again with a letter or two different counts as the same line: it keeps its translation, costs no new request and does not flicker. Every translated line is also kept on disk, so a replayed video or a game line you hear for the tenth time is shown at once, even after a restart.
+
 You can reorder the sources or switch one off, for all apps or for one app profile, in **Settings › Sources**. The full decision table, with the timing rules and the hysteresis that stops flicker, is in [docs/ALGORITHM.md](docs/ALGORITHM.md).
 
 <p align="center"><img src="docs/screenshots/settings-sources.png" width="640" alt="Settings, Sources: settings for all apps or one app profile, and the order of synced lyrics, on-screen subtitles and audio, each with up and down buttons and a switch"></p>
@@ -103,11 +105,21 @@ With **Pivot through English** (on by default), speech and text in any language 
 
 The target can be any of 46 languages, including Persian, Arabic, Turkish, Spanish, Portuguese, French, German, Italian, Russian, Ukrainian, Hindi, Urdu, Bengali, Indonesian, Japanese, Korean and Chinese. Persian, Arabic, Hebrew, Urdu, Sorani Kurdish and Pashto are laid out right to left, with letters shaped by Windows so they always join. The Vazirmatn font is bundled.
 
+## Offline translator
+
+When Gemini and free Google Translate both fail (no internet, or every limit reached), Dualyrics can translate on your PC with the language models of [Argos Translate](https://github.com/argosopentech/argos-translate). The quality is lower than Gemini's, but the subtitles keep coming. Set it up in **Settings › Translation › Offline translator**: install the translation engine once (CTranslate2 and SentencePiece, about 40 MB, one click; like Live mode, the installed app needs Python 3.12 for that one download), then press **Show available languages** and download the pair you need, for example English to your language. A pair without its own model goes through English when both halves are installed. Downloads resume after a broken connection, each model's licence is shown once it is downloaded, and **Remove** deletes a model again.
+
 ## Live mode
 
 Live mode turns whatever your speakers play into subtitles. It records the speaker output (WASAPI loopback), cuts it at natural pauses, recognises speech with [faster-whisper](https://github.com/SYSTRAN/faster-whisper) on your NVIDIA GPU or CPU, and shows the translation a moment later. Typical Whisper mistakes, such as "Thank you for watching" during silence or music, are filtered out.
 
-Live mode's speech packages (about 150 MB, or about 1 GB more with NVIDIA GPU support) are not inside the exe, so the app stays near 25 MB and starts fast. To add them:
+On Windows 11 (22H2 and later) Live mode can use **Windows Live Captions** instead of Whisper: Microsoft's own offline captioner, fast and light, started hidden in the background (no window, no taskbar button, no focus change) and read through UI Automation. **Settings › Live mode › Speech engine** is Automatic by default: it uses Live Captions when a Live Captions language is installed for the spoken language and the English pivot does not need Whisper, and switches to Whisper by itself when Live Captions cannot run. To add a language, open Live Captions once with `Win+Ctrl+L`. Live Captions also works without the Whisper packages.
+
+**Listen to** decides what is recorded: **All apps except Dualyrics** (the default, so a dubbed voice is never captioned again), **Only the app in use** (just the game, player or browser of the active profile, so music or a call in another app is left alone) or **Everything you hear**. The first two need Windows 10 build 20348 or Windows 11; older Windows records everything.
+
+With Whisper, speech is cut with the Silero voice detector (it tells speech from music and noise and adapts to how the speaker pauses), and long speech without pauses is captioned sentence by sentence while it goes on: every finished sentence is shown and translated at once, and the sentence still being spoken appears as a dim preview line.
+
+Live mode's speech packages (about 150 MB, or about 1 GB more with NVIDIA GPU support) are not inside the exe, so the app stays near 25 MB and starts fast. The app downloads them itself and resumes a broken download, so a slow or flaky connection or proxy only makes it take longer; an install that stops half-way is never taken for a finished one. To add them:
 
 1. Open **Settings › Live mode** and click **Install Live mode**. Tick the NVIDIA option if you have an NVIDIA card. The installed app puts the packages in `%APPDATA%\Dualyrics\live-runtime` and needs [Python 3.12](https://www.python.org/downloads/) on the PC once, only to run that download. From source, run `pip install -e .[live]` or `.[live-gpu]` instead.
 2. Pick a speech model: `small` is a good default, `tiny` and `base` are lighter, `medium` wants a GPU. Turn on **English-only model** for English games and films. The model downloads once, on first use, into `%APPDATA%\Dualyrics\models`.
@@ -157,7 +169,7 @@ Dubbing reads the translation aloud. It is off by default; turn it on in **Setti
 | Microsoft Edge voices | Free, online | Needs the small `edge-tts` package, one click to install |
 | Piper | Free, offline | About 20 MB plus 20 to 60 MB per voice, one click to install |
 
-**Automatic** picks Gemini Live for game and film audio and Gemini voices for text when you have a key, otherwise Edge, otherwise Piper. An engine that fails hands the line to the next one.
+**Automatic** picks Gemini Live for game and film audio and Gemini voices for text when you have a key, otherwise Edge, otherwise Piper. An engine that fails hands the line to the next one. Choose a **female or male voice** for each target language (for Persian, Dilara or Farid). Edge's MP3 speech is decoded inside the app, so it also plays on Windows "N" editions without the Media Feature Pack.
 
 <p align="center"><img src="docs/screenshots/settings-dubbing.png" width="640" alt="Settings, Dubbing: the speak-the-translation switch (off), what is spoken, and the voice engine"></p>
 
@@ -208,7 +220,8 @@ Dualyrics has no account, no telemetry, no analytics and no update check. Speech
 | Google Gemini API (dubbing) | Translated lines to speak; with Gemini Live, the captured speaker audio | Only with dubbing on and a Gemini engine chosen |
 | Microsoft Edge voices | Translated lines to speak | Only with dubbing on and the Edge engine |
 | Hugging Face, GitHub | Download of the chosen Whisper model or Piper voice | Once, on first use |
-| PyPI | pip download of the Live mode or Edge voice packages | Only when you click Install |
+| Argos Translate (`raw.githubusercontent.com`, `argos-net.com`) | Download of the package list and of the offline language packages you pick | Only when you open the list or click Download |
+| PyPI | pip download of the Live mode, Edge voice or offline translator packages | Only when you click Install |
 
 Everything else stays in `%APPDATA%\Dualyrics`: settings (Gemini keys encrypted with DPAPI), cache, models, usage data, transcripts (only with **Save transcripts**), `api.json` and logs. The screen picture used for OCR never leaves your PC. To remove everything, uninstall and answer **Yes** when asked about your settings.
 
@@ -298,15 +311,22 @@ Every option applies at once and is saved automatically to `%APPDATA%\Dualyrics\
 | `live_enabled`, `live_when_no_lyrics` | Live | On, On | Live captions, also for songs and videos without lyrics |
 | `live_model`, `live_english_only`, `live_device` | Live | `small`, Off, `auto` | Whisper model, English-only variant, `cpu` or `gpu` |
 | `live_source_language` | Live | `auto` | Spoken language, or automatic |
+| `live_engine` | Live | `auto` | Speech engine: `auto`, `live_captions` (Windows 11 Live Captions) or `whisper` |
+| `live_capture` | Live | `all_except_dualyrics` | What is recorded: `all_except_dualyrics`, `app` (the app in use) or `system` (everything) |
 | `live_vad_sensitivity`, `live_max_segment` | Live | `5`, `6` | Voice sensitivity (1 to 10) and the longest piece in seconds |
+| `live_vad` | Live | `auto` | Speech detection: `auto` (Silero when installed), `silero` or `energy` |
+| `live_interim`, `live_interim_preview` | Live | On, On | Caption long speech sentence by sentence before the pause; show the unfinished sentence as a dim line |
 | `live_reading_cps`, `live_min_display`, `live_context_lines` | Live | `17`, `1.5`, `4` | Reading speed, shortest time on screen, earlier lines sent for context |
 | `live_save_transcripts` | Live | Off | Save captions to `transcripts\YYYY-MM-DD.txt` |
 | `provider` | Translation | `free` | `gemini` or `free` (Google Translate) |
-| `gemini_keys`, `gemini_models` | Translation | empty, four Flash models | Keys and models, tried in order; keys stored encrypted |
+| `gemini_keys`, `gemini_models` | Translation | empty, four Flash models | Keys (taking turns) and models (in order); keys stored encrypted |
+| `gemini_keys_off` | Translation | empty | Keys switched off (fingerprints, never the keys) |
+| `offline_enabled` | Translation | On | Offline translator as the last tier (only with a language package installed) |
 | `fallback_free`, `skip_same_language`, `style` | Translation | On, On, a song-translator instruction | Free fallback, skip songs already in your language, style text for Gemini |
 | `dub_enabled`, `dub_engine`, `dub_voice` | Dubbing | Off, `auto`, `auto` | Dubbing, voice engine and voice |
 | `dub_speed`, `dub_volume`, `dub_duck`, `dub_duck_amount` | Dubbing | `1.0`, `90`, On, `60` | Voice speed and volume; turn other apps down, by how much |
 | `dub_lyrics`, `dub_captions` | Dubbing | On, On | What is spoken |
+| `dub_gender` | Dubbing | empty | `female` or `male` voice per target language, used while the voice is Automatic |
 | `usage_limits`, `usage_warn` | Usage | estimates, On | Daily request limits per model, warning at 80 % |
 | `monitors_off`, `monitor`, `follow_active_monitor` | Monitors | none, primary, Off | Where the overlay may go |
 | `position_preset`, `overlay_scale`, `overlay_opacity` | Monitors | `bottom`, `1.0`, `1.0` | Position, text size and opacity |
@@ -328,6 +348,8 @@ Every option applies at once and is saved automatically to `%APPDATA%\Dualyrics\
 | Nothing shows for a song | Check that the song appears in the Windows media flyout; if not, the player does not report to Windows |
 | No subtitles read from a game | Draw the subtitle area in **Settings › Sources** and use **Test on a window…**; install the Windows OCR pack of the language |
 | No live captions over a game | Use Borderless or Windowed mode; check that **Settings › Live mode** says "Installed" and the sound plays on the default output device |
+| Live mode does not use Live Captions | Open Live Captions once with `Win+Ctrl+L` and add the spoken language there, or set **Speech engine** to **Windows Live Captions**; it needs Windows 11 22H2 or later |
+| Music or a call in another app gets captioned | Set **Settings › Live mode › Listen to** to **Only the app in use** |
 | The overlay ignores the mouse | Click-through is on: press `Ctrl+Alt+K` |
 | Anything else | Start with `--debug` and open the log from **About › Open log** |
 
@@ -352,7 +374,10 @@ Bug reports, interface translations, new templates and pull requests are welcome
 ## Credits
 
 - Lyrics from [LRCLIB](https://lrclib.net), a free and open lyrics database. Please support it and add lyrics it is missing.
-- Speech recognition with [faster-whisper](https://github.com/SYSTRAN/faster-whisper) and the Whisper models converted by SYSTRAN; loopback capture with [PyAudioWPatch](https://github.com/s0d3s/PyAudioWPatch); offline voices with [Piper](https://github.com/rhasspy/piper).
+- Speech recognition with [faster-whisper](https://github.com/SYSTRAN/faster-whisper) and the Whisper models converted by SYSTRAN; loopback capture with [PyAudioWPatch](https://github.com/s0d3s/PyAudioWPatch); offline voices with [Piper](https://github.com/rhasspy/piper); MP3 decoding with [pyminiaudio](https://github.com/irmen/pyminiaudio) (dr_mp3); per-app capture ported from [dota-live-translator](https://github.com/fr0styJS/dota-live-translator) (MIT).
+- Voice detection with [Silero VAD](https://github.com/snakers4/silero-vad) (MIT); segmentation and interim-commit rules ported from [LiveTranslate](https://github.com/TheDeathDragon/LiveTranslate) (MIT); the Windows Live Captions engine follows [LiveCaptions-Translator](https://github.com/SakiRinn/LiveCaptions-Translator) (Apache-2.0) and [LiveCaptions-Translator-Buddy](https://github.com/MuuCake/LiveCaptions-Translator-Buddy) (MIT), and the ApplicationLoopback sample of [Windows-classic-samples](https://github.com/microsoft/Windows-classic-samples) (MIT) documents the per-app capture.
+- Near-duplicate subtitle detection ported from [Translumo](https://github.com/ramjke/Translumo) (Apache-2.0); the offline translator reads the language packages of [Argos Translate](https://github.com/argosopentech/argos-translate) (MIT) with [CTranslate2](https://github.com/OpenNMT/CTranslate2) and [SentencePiece](https://github.com/google/sentencepiece).
+- Copyright lines, licences and the files each project went into: [NOTICE](NOTICE), with the licence texts in [LICENSES](LICENSES) and per-file notes in [docs/ATTRIBUTION_NOTES.md](docs/ATTRIBUTION_NOTES.md).
 - Interface with [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter), [pystray](https://github.com/moses-palmer/pystray) and [Pillow](https://python-pillow.org); Windows APIs through [PyWinRT](https://github.com/pywinrt/pywinrt) and [comtypes](https://github.com/enthought/comtypes). The [Vazirmatn](https://github.com/rastikerdar/vazirmatn) font is bundled under the SIL Open Font License.
 - The installer is built with [Inno Setup](https://jrsoftware.org/isinfo.php).
 

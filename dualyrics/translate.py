@@ -17,7 +17,7 @@ from typing import Any, Callable
 
 import requests
 
-from dualyrics import langs, net
+from dualyrics import keypool, langs, net
 
 log = logging.getLogger(__name__)
 
@@ -122,49 +122,56 @@ def _unique(lines: list[str]) -> tuple[list[str], list[int]]:
 
 
 # ---------------------------------------------------------------- Gemini
-_RETRY_DELAY = re.compile(r'"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"')
 NOTICE_EVERY = 60.0   # seconds between two "switched model/key" notices for the same pair
+
+
+class KeysResting(TranslationError):
+    """No Gemini key x model can be asked now (all rate limited, out of daily quota, rejected or switched off):
+    the caller goes straight to the next translator instead of retrying line by line."""
 
 
 def rate_limit_wait(msg: str, raw: str = "", now: float | None = None) -> float:
     """How long a model x key stays skipped after HTTP 429: until the daily reset (midnight Pacific) when the
     daily quota is used up, else the server's ``retryDelay``, else 90 s."""
-    text = f"{msg} {raw}".lower()
-    if "perday" in text.replace(" ", "").replace("_", "") or "per day" in text or "requests_per_day" in text:
+    if keypool.is_daily(msg, raw):
         from dualyrics import usage
 
         return usage.quota_reset_in(time.time() if now is None else now)
-    m = _RETRY_DELAY.search(raw)
-    if m:
-        return max(5.0, min(3600.0, float(m.group(1)) + 1))
-    return 90.0
+    return keypool.retry_delay(raw) or 90.0
 
 
 class Gemini:
-    def __init__(self, session_factory: Callable[[], requests.Session]) -> None:
+    def __init__(self, session_factory: Callable[[], requests.Session], pool: keypool.KeyPool | None = None) -> None:
         self.session_factory = session_factory
-        self._cool: dict[tuple[str, str], float] = {}
+        self.pool = pool or keypool.KeyPool()
         self._lock = threading.Lock()
         # v2.1 usage meter (dualyrics/usage.py) and fallback notices, wired by the app
         self.meter: Any = None
         self.key_index: Callable[[str], int] = lambda key: 0
         self.on_notice: Callable[[str, dict[str, Any]], None] | None = None
         self._noticed: dict[tuple[str, str], float] = {}
+        self._resting = False            # every key was resting at the last request (one notice per episode)
 
+    # -- the key pool (dualyrics/keypool.py); the old names stay for the dubbing engines
     def _cooldown(self, model: str, key: str, seconds: float) -> None:
-        with self._lock:
-            self._cool[(model, key)] = time.time() + seconds
+        self.pool.cooldown(model, key, seconds)
 
     def _cooling(self, model: str, key: str) -> bool:
-        with self._lock:
-            return self._cool.get((model, key), 0) > time.time()
+        return not self.pool.available(model, key)
 
     def cooling(self, model: str, key: str) -> bool:
         return self._cooling(model, key)
 
     def reset_cooldowns(self) -> None:
-        with self._lock:
-            self._cool.clear()
+        self.pool.reset(keep_exhausted=True)
+
+    def mark_limited(self, model: str, key: str, msg: str = "", raw: str = "") -> float:
+        """HTTP 429 seen outside ``ask`` (dubbing): per-minute limit or daily quota, in the key pool."""
+        return self.pool.mark_limited(model, key, msg, raw)
+
+    def can_ask(self, keys: list[str], models: list[str]) -> bool:
+        """Some enabled key x model can be asked now."""
+        return bool(keys) and self.pool.any_available(keys, models)
 
     def notice(self, what: str, **kw: Any) -> None:
         """Tell the user that a model, a key or the provider changed because of a limit (rate limited)."""
@@ -255,46 +262,75 @@ class Gemini:
         return json.loads(text), 200, "", ""
 
     def ask(self, keys: list[str], models: list[str], prompt: str, timeout: Any = net.TIMEOUT_SLOW) -> Any:
-        """Try every model x key (skipping ones cooling down after errors): when one is rate limited (429) the
-        next key, then the next model, is used, with a notice. Raises TranslationError."""
+        """One answer from the key pool: the models in the user's order, the enabled keys in round robin, pairs
+        that rest (rate limited, out of daily quota, rejected, switched off) skipped. A 429 moves on to the next
+        key, then the next model, with a notice. Raises KeysResting when nothing can be asked (at once, without
+        a request), else TranslationError."""
         if not keys:
             raise TranslationError("no Gemini API key")
+        plan = self.pool.order(keys, models)
+        if not plan:
+            self._all_resting(keys, models)
+            raise KeysResting("every Gemini key is resting (rate limit, daily quota, rejected or switched off)")
         last = "all models are cooling down"
         limited: tuple[str, str] | None = None     # the first model x key that answered 429 in this request
-        for model in models:
-            for key in keys:
-                if self._cooling(model, key):
-                    continue
-                try:
-                    data, status, msg, raw = self._call(model, key, prompt, timeout=timeout)
-                except json.JSONDecodeError as e:
-                    self._cooldown(model, key, 20)
-                    last = f"{model}: bad JSON ({e})"
-                    continue
-                except Exception as e:
-                    self._cooldown(model, key, 30 if net.is_network_error(e) else 60)
-                    last = f"{model}: {e}"
-                    log.info("gemini %s failed: %s", model, e)
-                    if net.is_network_error(e):
-                        raise TranslationError(f"network error: {e}") from e
-                    continue
-                if status == 200 and data is not None:
-                    if limited is not None:
-                        self.notice("fallback_model", frm=limited[0], to=model, key=self._key_no(key))
-                    return data
-                wait = {400: 3600, 401: 86400, 403: 86400, 404: 86400}.get(status, 30)
-                if status == 429:
-                    wait = rate_limit_wait(msg, raw)
-                    if limited is None:
-                        limited = (model, key)
-                elif status == 400 and "api key" not in msg.lower():
-                    wait = 120  # bad request for this model, not a bad key
-                self._cooldown(model, key, wait)
-                last = f"{model}: HTTP {status} {msg}"
-                log.info("gemini %s -> %s %s", model, status, msg)
+        for model, key in plan:
+            if not self.pool.available(model, key):
+                continue                            # marked meanwhile (a key of the same project ran out)
+            try:
+                data, status, msg, raw = self._call(model, key, prompt, timeout=timeout)
+            except json.JSONDecodeError as e:
+                self.pool.cooldown(model, key, 20, "bad JSON")
+                last = f"{model}: bad JSON ({e})"
+                continue
+            except Exception as e:
+                last = f"{model}: {e}"
+                log.info("gemini %s failed: %s", model, e)
+                if net.is_network_error(e):
+                    self.pool.cooldown(model, key, 30, "network")
+                    raise TranslationError(f"network error: {e}") from e
+                self.pool.cooldown(model, key, 60, "error")
+                continue
+            if status == 200 and data is not None:
+                self.pool.mark_ok(model, key)
+                self._resting = False
+                if limited is not None:
+                    self.notice("fallback_model", frm=limited[0], to=model, key=self._key_no(key))
+                return data
+            if status == 429:
+                self.pool.mark_limited(model, key, msg, raw)
+                if keypool.is_daily(msg, raw):
+                    self.pool.evidence_daily(model, keys)
+                if limited is None:
+                    limited = (model, key)
+            elif keypool.is_bad_key(status, msg):
+                self.pool.mark_invalid(key, msg)
+            elif status == 400:
+                self.pool.cooldown(model, key, 120, "bad request")   # bad request for this model, not a bad key
+            elif status in (403, 404):
+                self.pool.cooldown(model, key, 86400, f"HTTP {status}")  # model not available to this key
+            else:
+                self.pool.cooldown(model, key, 30, f"HTTP {status}")
+            last = f"{model}: HTTP {status} {msg}"
+            log.info("gemini %s -> %s %s", model, status, msg)
+        if not self.pool.any_available(keys, models):
+            self._all_resting(keys, models)
+            raise KeysResting(f"rate limited: {last}" if limited else last)
         if limited is not None:
             last = f"rate limited: {last}"
         raise TranslationError(last)
+
+    def _all_resting(self, keys: list[str], models: list[str]) -> None:
+        """One notice when the pool runs dry (until a key works again)."""
+        if self._resting:
+            return
+        self._resting = True
+        at = self.pool.next_free_at(keys, models)
+        if at == float("inf"):
+            return                      # no key is switched on: nothing to wait for
+        when = time.strftime("%H:%M", time.localtime(at))
+        log.info("gemini: every key is resting until %s", when)
+        self.notice("keys_resting", at=when)
 
 
 def build_prompt(lines: list[str], title: str, artist: str, target: str, style: str, retry_note: str = "") -> str:
@@ -315,11 +351,25 @@ def build_prompt(lines: list[str], title: str, artist: str, target: str, style: 
 
 
 # ---------------------------------------------------------------- free Google Translate
+FREE_REST = (15.0, 120.0)   # seconds the free endpoint is skipped after a failure (doubling up to the maximum)
+
+
 class FreeGoogle:
-    """Unofficial, keyless Google Translate endpoint (good enough as a fallback)."""
+    """Unofficial, keyless Google Translate endpoint (good enough as a fallback). After a failure (429, network)
+    it rests for 15 s, doubling up to 2 min while it keeps failing, so when the offline translator is there the
+    next lines go to it at once instead of each waiting for a timeout."""
 
     def __init__(self, session_factory: Callable[[], requests.Session]) -> None:
         self.session_factory = session_factory
+        self._rest_until = 0.0
+        self._rest = FREE_REST[0]
+
+    def resting(self) -> bool:
+        return time.time() < self._rest_until
+
+    def _failed(self) -> None:
+        self._rest_until = time.time() + self._rest
+        self._rest = min(FREE_REST[1], self._rest * 2)
 
     def _one(self, text: str, target: str) -> tuple[str, str]:
         r = self.session_factory().get(FREE_URL, params={"client": "gtx", "sl": "auto", "tl": target, "dt": "t",
@@ -331,6 +381,15 @@ class FreeGoogle:
         return out, detected
 
     def translate(self, lines: list[str], target: str) -> tuple[list[str], str]:
+        try:
+            out = self._translate(lines, target)
+        except Exception:
+            self._failed()
+            raise
+        self._rest_until, self._rest = 0.0, FREE_REST[0]
+        return out
+
+    def _translate(self, lines: list[str], target: str) -> tuple[list[str], str]:
         chunks: list[list[str]] = [[]]
         size = 0
         for ln in lines:
@@ -354,11 +413,53 @@ class FreeGoogle:
         return result, detected
 
 
+# ---------------------------------------------------------------- the chain after Gemini
+def offline_ready(translator: Any, cfg: dict[str, Any], target: str, source: str = "") -> bool:
+    """The offline translator (dualyrics/offline.py) is switched on and has a package route to ``target``."""
+    off = getattr(translator, "offline", None)
+    if off is None or not cfg.get("offline_enabled", True):
+        return False
+    try:
+        return bool(off.ready(source, target))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def fallback_chain(translator: Any, lines: list[str], target: str, cfg: dict[str, Any], source: str = "",
+                   allow_free: bool = True) -> tuple[list[str], str, str]:
+    """The tiers after Gemini: free Google (when allowed), then the offline translator. Returns (lines,
+    detected source language, provider ``free`` | ``offline``). Raises TranslationError when both fail."""
+    errors: list[str] = []
+    offline = offline_ready(translator, cfg, target, source)
+    free = getattr(translator, "free", None)
+    if allow_free and free is not None:
+        resting = getattr(free, "resting", None)
+        if not (offline and callable(resting) and resting()):
+            try:
+                out, detected = free.translate(lines, target)
+                return out, detected, "free"
+            except Exception as e:  # noqa: BLE001
+                errors.append(f"free translate: {e}")
+                log.info("free translate failed: %s", e)
+        else:
+            errors.append("free translate: resting after a failure")
+    if offline:
+        try:
+            out, used = translator.offline.translate(lines, target, source)
+            return out, used, "offline"
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"offline: {e}")
+            log.info("offline translate failed: %s", e)
+    raise TranslationError("; ".join(errors) or "no translator is available")
+
+
 # ---------------------------------------------------------------- facade
 class Translator:
-    def __init__(self, session_factory: Callable[[], requests.Session]) -> None:
-        self.gemini = Gemini(session_factory)
+    def __init__(self, session_factory: Callable[[], requests.Session], pool: keypool.KeyPool | None = None,
+                 offline: Any = None) -> None:
+        self.gemini = Gemini(session_factory, pool)
         self.free = FreeGoogle(session_factory)
+        self.offline = offline           # dualyrics.offline.OfflineTranslator (the last tier), wired by the app
 
     def translate(self, lines: list[str], title: str, artist: str, cfg: dict[str, Any],
                   cancelled: Callable[[], bool] = lambda: False) -> Translation:
@@ -382,16 +483,13 @@ class Translator:
             except TranslationError as e:
                 notes.append(f"gemini: {e}")
                 log.warning("gemini translation failed: %s", e)
-                if not cfg["fallback_free"]:
+                if not cfg["fallback_free"] and not offline_ready(self, cfg, target):
                     raise
         if out is None and not cancelled():
-            if cfg["provider"] == "gemini" and not cfg["gemini_keys"] and not cfg["fallback_free"]:
-                raise TranslationError("no Gemini API key")
-            try:
-                out, source = self.free.translate(uniq, target)
-                provider = "free"
-            except Exception as e:
-                raise TranslationError(f"free translate: {e}") from e
+            allow_free = cfg["provider"] != "gemini" or cfg["fallback_free"]
+            if not allow_free and not offline_ready(self, cfg, target):
+                raise TranslationError(notes[-1] if notes else "no Gemini API key")
+            out, source, provider = fallback_chain(self, uniq, target, cfg, allow_free=allow_free)
         if out is None:
             raise TranslationError("cancelled")
         if cfg["skip_same_language"] and source and langs.same_language(source, target):
@@ -440,19 +538,35 @@ class Translator:
             out.extend(res)
         return out, src
 
+    def test_key(self, key: str, models: list[str]) -> list[tuple[str, bool, str]]:
+        """Ask every model once with a tiny request through ``key``; the answers update the key pool (a working
+        key is no longer rejected, a 429 marks its limit). Returns (model, ok, message)."""
+        out = []
+        pool = self.gemini.pool
+        for model in models:
+            try:
+                data, status, msg, raw = self.gemini._call(model, key, "Reply with the single word OK.",
+                                                           timeout=(8, 30), json_mode=False)
+            except Exception as e:  # noqa: BLE001
+                out.append((model, False, str(e)[:160]))
+                continue
+            if status == 200:
+                pool.mark_ok(model, key)
+            elif status == 429:
+                pool.mark_limited(model, key, msg, raw)
+            elif keypool.is_bad_key(status, msg):
+                pool.mark_invalid(key, msg)
+            out.append((model, status == 200, "OK" if status == 200 else f"HTTP {status} {msg}"))
+        return out
+
     def test_gemini(self, keys: list[str], models: list[str]) -> list[tuple[str, str, bool, str]]:
         """Check every key x model with a tiny request. Returns (masked_key, model, ok, message)."""
         results = []
         for key in keys:
-            masked = key[:4] + "…" + key[-4:] if len(key) > 10 else "…"
-            for model in models:
-                try:
-                    data, status, msg = self.gemini.call_once(model, key, "Reply with the single word OK.",
-                                                              timeout=(8, 30), json_mode=False)
-                    ok = status == 200
-                    results.append((masked, model, ok, "OK" if ok else f"HTTP {status} {msg}"))
-                except Exception as e:
-                    results.append((masked, model, False, str(e)[:160]))
-        if any(ok for *_, ok, _ in results):
-            self.gemini.reset_cooldowns()
+            masked = mask_key(key)
+            results += [(masked, model, ok, msg) for model, ok, msg in self.test_key(key, models)]
         return results
+
+
+def mask_key(key: str) -> str:
+    return key[:4] + "…" + key[-4:] if len(key) > 10 else "…"

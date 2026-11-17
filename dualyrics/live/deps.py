@@ -17,16 +17,19 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
 import threading
+import time
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from dualyrics import paths
 
@@ -39,6 +42,7 @@ CREATE_NO_WINDOW = 0x08000000
 
 _dll_dirs_added = False
 _lock = threading.Lock()
+_install_lock = threading.Lock()
 
 
 def runtime_dir() -> Path:
@@ -94,9 +98,9 @@ def _has(module: str) -> bool:
 
 
 def has(module: str) -> bool:
-    """An optional package (Live mode, the Edge voices of dubbing) is installed."""
+    """An optional package (Live mode, the Edge voices of dubbing) is installed, and its last install finished."""
     activate_runtime()
-    return _has(module)
+    return module not in pending() and _has(module)
 
 
 @dataclass(frozen=True)
@@ -112,8 +116,9 @@ class Status:
 
 def status() -> Status:
     activate_runtime()
-    missing = tuple(req for mod, req in REQUIRED.items() if not _has(mod))
-    return Status(missing, all(_has(m) for m in GPU), frozen())
+    pend = pending()
+    missing = tuple(req for mod, req in REQUIRED.items() if mod in pend or not _has(mod))
+    return Status(missing, all(m not in pend and _has(m) for m in GPU), frozen())
 
 
 def available() -> bool:
@@ -183,45 +188,100 @@ def _find_python() -> list[str] | None:
     return None
 
 
-def install_command(gpu: bool, proxy: str | None, packages: list[str] | None = None) -> list[str] | None:
-    """The pip command line, or None when no suitable Python exists (packaged exe without Python).
-    ``packages`` replaces Live mode's requirements (the dubbing voices use the same helper)."""
-    reqs = list(packages) if packages else list(REQUIRED.values()) + (list(GPU.values()) if gpu else [])
+PIP_RETRIES = 10                 # pip's own retries per request (a flaky proxy drops connections)
+PIP_TIMEOUT = 60                 # s without data before pip retries
+PIP_RESUME_RETRIES = 20          # pip >= 25.1: continue a broken download instead of starting it again
+VERIFY_TIMEOUT = 300
+_WHEEL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,200}\.(?:whl|tar\.gz|zip)$")
+
+
+def _python() -> list[str] | None:
+    """The interpreter whose pip installs the packages (None: packaged exe without a matching Python)."""
+    return _find_python() if frozen() else [sys.executable]
+
+
+def pip_version(py: list[str]) -> tuple[int, ...]:
+    """Version of that interpreter's pip ((0,) when unknown)."""
+    try:
+        out = subprocess.run(py + ["-m", "pip", "--version"], capture_output=True, text=True, timeout=30,
+                             creationflags=CREATE_NO_WINDOW)
+        m = re.match(r"pip (\d+)\.(\d+)(?:\.(\d+))?", out.stdout.strip())
+        if m:
+            return tuple(int(x) for x in m.groups() if x is not None)
+    except Exception:
+        log.debug("pip --version failed", exc_info=True)
+    return (0,)
+
+
+def robust_flags(version: tuple[int, ...]) -> list[str]:
+    """pip options that survive a flaky connection: more retries, a longer timeout, and resumed downloads
+    when this pip has ``--resume-retries`` (25.1 and later)."""
+    flags = ["--retries", str(PIP_RETRIES), "--timeout", str(PIP_TIMEOUT)]
+    if version >= (25, 1):
+        flags += ["--resume-retries", str(PIP_RESUME_RETRIES)]
+    return flags
+
+
+def _requirements(gpu: bool, packages: list[str] | None) -> list[str]:
+    return list(packages) if packages else list(REQUIRED.values()) + (list(GPU.values()) if gpu else [])
+
+
+def install_command(gpu: bool, proxy: str | None, packages: list[str] | None = None,
+                    pip_ver: tuple[int, ...] = (0,), py: list[str] | None = None) -> list[str] | None:
+    """The pip command line (requirements last), or None when no suitable Python exists (packaged exe
+    without Python). ``packages`` replaces Live mode's requirements (the dubbing voices use the same helper)."""
+    reqs = _requirements(gpu, packages)
+    py = py or _python()
+    if py is None:
+        return None
+    cmd = py + ["-m", "pip", "install", "--upgrade"]
     if frozen():
-        py = _find_python()
-        if py is None:
-            return None
-        cmd = py + ["-m", "pip", "install", "--upgrade", "--target", str(runtime_dir())]
-    else:
-        cmd = [sys.executable, "-m", "pip", "install", "--upgrade"]
-    cmd += ["--disable-pip-version-check", "--no-input", "--progress-bar", "off"]
+        cmd += ["--target", str(runtime_dir())]
+    cmd += ["--disable-pip-version-check", "--no-input", "--progress-bar", "off"] + robust_flags(pip_ver)
     if proxy:
         cmd += ["--proxy", proxy]
     return cmd + reqs
 
 
-def install(gpu: bool, proxy_mode: str, proxy_url: str, on_line: Callable[[str], None] = lambda s: None,
-            cancelled: Callable[[], bool] = lambda: False, packages: dict[str, str] | None = None,
-            ) -> tuple[bool, str]:
-    """Run the installer (blocking; call it from a worker thread). Returns (ok, last message). ``packages``
-    ({import name: pip requirement}) installs those instead of Live mode."""
-    proxy = pip_proxy(proxy_mode, proxy_url)
-    cmd = install_command(gpu, proxy, list(packages.values()) if packages else None)
-    if cmd is None:
-        v = f"{sys.version_info.major}.{sys.version_info.minor}"
-        what = "these voices" if packages else "Live mode"
-        return False, f"Python {v} not found (python.org); it is needed once to install {what}."
-    env = dict(os.environ)
-    if proxy == "":
-        for k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy"):
-            env.pop(k, None)
-    shown = [c if not (proxy and c == proxy) else "<proxy>" for c in cmd]
-    log.info("installing Live mode: %s", " ".join(shown))
+# ---------------------------------------------------------------- a half-finished install never counts
+def _pending_file() -> Path:
+    return paths.data_dir() / "install-pending.json"
+
+
+def pending() -> set[str]:
+    """Import names of packages whose last install did not finish (they count as missing until one does)."""
+    try:
+        data = json.loads(_pending_file().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set()
+    mods = data.get("modules", []) if isinstance(data, dict) else []
+    return {m for m in mods if isinstance(m, str)} if isinstance(mods, list) else set()
+
+
+def _set_pending(modules: set[str]) -> None:
+    f = _pending_file()
+    try:
+        if modules:
+            f.write_text(json.dumps({"modules": sorted(modules)}), encoding="utf-8")
+        else:
+            f.unlink(missing_ok=True)
+    except OSError:
+        log.debug("install marker not written", exc_info=True)
+
+
+def wheels_dir() -> Path:
+    return paths.data_dir() / "downloads" / "wheels"
+
+
+# ---------------------------------------------------------------- the steps (separate so tests can fake them)
+def _run_pip(cmd: list[str], env: dict[str, str], on_line: Callable[[str], None],
+             cancelled: Callable[[], bool]) -> tuple[int, str]:
+    """Run pip, forwarding its output lines. Returns (exit code, last line); -1 when cancelled."""
     try:
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env,
                                 encoding="utf-8", errors="replace", creationflags=CREATE_NO_WINDOW)
     except OSError as e:
-        return False, str(e)
+        return 1, str(e)
     last = ""
     assert proc.stdout is not None
     for line in proc.stdout:
@@ -231,16 +291,170 @@ def install(gpu: bool, proxy_mode: str, proxy_url: str, on_line: Callable[[str],
             on_line(line[:300])
         if cancelled():
             proc.kill()
-            return False, "cancelled"
-    code = proc.wait()
+            proc.wait()
+            return -1, "cancelled"
+    return proc.wait(), last
+
+
+def _verify_imports(py: list[str], modules: list[str]) -> str:
+    """'' when every module imports in a fresh interpreter (the way the app will load them), else the error."""
+    if not modules:
+        return ""
+    code = ("import sys, importlib\n"
+            + (f"sys.path.insert(0, {str(runtime_dir())!r})\n" if frozen() else "")
+            + f"for m in {modules!r}:\n    importlib.import_module(m)\n")
+    try:
+        out = subprocess.run(py + ["-c", code], capture_output=True, text=True, timeout=VERIFY_TIMEOUT,
+                             encoding="utf-8", errors="replace", creationflags=CREATE_NO_WINDOW)
+    except Exception as e:  # noqa: BLE001
+        return str(e)
+    if out.returncode == 0:
+        return ""
+    lines = [ln for ln in (out.stderr or out.stdout or "").splitlines() if ln.strip()]
+    return lines[-1][:300] if lines else f"exit code {out.returncode}"
+
+
+def _report_files(report: Any) -> list[tuple[str, str, str]] | None:
+    """(file name, https URL, sha256) of everything a ``pip install --dry-run --report`` would download, or
+    None when something cannot be fetched by the app (a local path, a VCS link, an odd file name)."""
+    from urllib.parse import unquote, urlsplit
+
+    out = []
+    items = report.get("install", []) if isinstance(report, dict) else []
+    for it in items if isinstance(items, list) else []:
+        di = (it.get("download_info") or {}) if isinstance(it, dict) else {}
+        url = str(di.get("url") or "")
+        u = urlsplit(url)
+        name = unquote(u.path.rsplit("/", 1)[-1])
+        if u.scheme != "https" or not _WHEEL_NAME.match(name):
+            return None
+        ai = di.get("archive_info") or {}
+        sha = str((ai.get("hashes") or {}).get("sha256") or "")
+        if not sha and str(ai.get("hash") or "").startswith("sha256="):
+            sha = str(ai["hash"])[7:]
+        out.append((name, url, sha.lower() if re.match(r"^[0-9a-fA-F]{64}$", sha) else ""))
+    return out
+
+
+def _prefetch(cmd: list[str], n_reqs: int, env: dict[str, str], proxy_mode: str, proxy_url: str,
+              on_line: Callable[[str], None], cancelled: Callable[[], bool]) -> list[Path] | None:
+    """Resolve with pip (``--dry-run --report``, metadata only) and download every file with the app's
+    resumable downloader into ``wheels_dir()``. Returns the files, or None when this cannot be used (old pip,
+    resolution failed, a file the app cannot fetch); the caller then lets pip download as usual."""
+    from dualyrics import download, net
+
+    folder = wheels_dir()
+    folder.mkdir(parents=True, exist_ok=True)
+    report_path = folder / "report.json"
+    report_path.unlink(missing_ok=True)
+    dry = cmd[:-n_reqs] + ["--dry-run", "--quiet", "--report", str(report_path)] + cmd[-n_reqs:]
+    on_line("Resolving packages…")
+    code, last = _run_pip(dry, env, lambda line: None, cancelled)
+    if code == -1:
+        raise download.DownloadCancelled()
+    if code != 0 or not report_path.is_file():
+        log.info("pip could not resolve for the prefetch (exit %s): %s", code, last)
+        return None
+    try:
+        files = _report_files(json.loads(report_path.read_text(encoding="utf-8")))
+    except (OSError, ValueError):
+        files = None
+    if files is None:
+        return None
+    session = net.make_session(proxy_mode, proxy_url)
+    out: list[Path] = []
+    state = {"at": 0.0}
+    for i, (name, url, sha) in enumerate(files, 1):
+        def progress(done: int, total: int, name: str = name, i: int = i) -> None:
+            now = time.monotonic()
+            if now - state["at"] >= 0.5 or (total and done >= total):
+                state["at"] = now
+                size = f"{done / 1e6:.1f} / {total / 1e6:.1f} MB" if total else f"{done / 1e6:.1f} MB"
+                on_line(f"Downloading {name} ({i}/{len(files)}): {size}")
+
+        out.append(download.fetch(session, url, folder / name, progress, cancelled, sha256=sha))
+    return out
+
+
+def install(gpu: bool, proxy_mode: str, proxy_url: str, on_line: Callable[[str], None] = lambda s: None,
+            cancelled: Callable[[], bool] = lambda: False, packages: dict[str, str] | None = None,
+            ) -> tuple[bool, str]:
+    """Run the installer (blocking; call it from a worker thread). Returns (ok, last message). ``packages``
+    ({import name: pip requirement}) installs those instead of Live mode.
+
+    1. pip resolves the packages (metadata only) and the app downloads every file itself, resuming broken
+       transfers (``_prefetch``); pip then installs from those local files with ``--no-index``.
+    2. When that cannot be used or fails, pip downloads by itself with more retries, a longer timeout and
+       ``--resume-retries`` where available.
+    3. The packages are imported in a fresh interpreter. Until an install gets this far they are marked
+       pending and count as missing, so a half-finished install never looks installed.
+
+    One install runs at a time (they share the download folder); a second one waits."""
+    with _install_lock:
+        return _install(gpu, proxy_mode, proxy_url, on_line, cancelled, packages)
+
+
+def _install(gpu: bool, proxy_mode: str, proxy_url: str, on_line: Callable[[str], None],
+             cancelled: Callable[[], bool], packages: dict[str, str] | None) -> tuple[bool, str]:
+    from dualyrics import download
+
+    proxy = pip_proxy(proxy_mode, proxy_url)
+    py = _python()
+    what = "these voices" if packages else "Live mode"
+    if py is None:
+        v = f"{sys.version_info.major}.{sys.version_info.minor}"
+        return False, f"Python {v} not found (python.org); it is needed once to install {what}."
+    mods = dict(packages) if packages else {**REQUIRED, **(GPU if gpu else {})}
+    reqs = _requirements(gpu, list(packages.values()) if packages else None)
+    cmd = install_command(gpu, proxy, list(packages.values()) if packages else None, pip_version(py), py)
+    assert cmd is not None
+    env = dict(os.environ)
+    if proxy == "":
+        for k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy"):
+            env.pop(k, None)
+    shown = [c if not (proxy and c == proxy) else "<proxy>" for c in cmd]
+    log.info("installing %s: %s", what, " ".join(shown))
+    files: list[Path] | None = None
+    try:
+        # resolving and downloading change nothing installed: the pending mark comes only before pip installs
+        files = _prefetch(cmd, len(reqs), env, proxy_mode, proxy_url, on_line, cancelled)
+    except download.DownloadCancelled:
+        return False, "cancelled"
+    except Exception as e:  # noqa: BLE001 - pip can still download by itself
+        log.warning("prefetch failed, pip downloads by itself: %s", e)
+        on_line(f"Download failed ({str(e)[:160]}); pip tries by itself…")
+    if cancelled():
+        return False, "cancelled"
+    _set_pending(pending() | set(mods))
+    code, last = 1, ""
+    if files is not None:
+        local = cmd[:-len(reqs)] + ["--no-index", "--find-links", str(wheels_dir())] + reqs
+        code, last = _run_pip(local, env, on_line, cancelled)
+        if code not in (0, -1):
+            log.info("install from the downloaded files failed (%s); pip downloads by itself", last)
+    if code not in (0, -1):
+        code, last = _run_pip(cmd, env, on_line, cancelled)
     importlib.invalidate_caches()
     if code != 0:
+        # a stopped or failed pip often changed nothing (or a reinstall over a working copy): what still
+        # loads in a fresh interpreter keeps counting as installed, so Live mode does not turn "missing"
+        if not _verify_imports(py, list(mods)):
+            _set_pending(pending() - set(mods))
+        if code == -1:
+            return False, "cancelled"
         log.warning("install failed (exit %s): %s", code, last)
         return False, last or f"pip exit code {code}"
-    if packages:
-        missing = [req for mod, req in packages.items() if not has(mod)]
-        return (False, "installed, but still missing: " + ", ".join(missing)) if missing else (True, last)
-    st = status()
-    if not st.ready:
-        return False, "installed, but still missing: " + ", ".join(st.missing)
+    problem = _verify_imports(py, list(mods))
+    if problem:
+        log.warning("installed, but the packages do not load: %s", problem)
+        return False, f"installed, but it does not load: {problem}"
+    _set_pending(pending() - set(mods))
+    for f in [*(files or []), wheels_dir() / "report.json"]:
+        try:
+            f.unlink(missing_ok=True)
+        except OSError:
+            pass
+    missing = [req for mod, req in mods.items() if not has(mod)]
+    if missing:
+        return False, "installed, but still missing: " + ", ".join(missing)
     return True, last

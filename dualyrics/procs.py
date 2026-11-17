@@ -247,6 +247,54 @@ def running() -> list[AppRef]:
     return list(out.values())
 
 
+def process_table() -> dict[int, tuple[int, str]]:
+    """pid -> (parent pid, lower-case exe name) of every process (empty on other platforms)."""
+    if not IS_WINDOWS:
+        return {}
+    snap = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+    if not snap or snap == wintypes.HANDLE(-1).value:
+        return {}
+    out: dict[int, tuple[int, str]] = {}
+    try:
+        e = PROCESSENTRY32W()
+        e.dwSize = ctypes.sizeof(e)
+        ok = kernel32.Process32FirstW(snap, ctypes.byref(e))
+        while ok:
+            out[int(e.th32ProcessID)] = (int(e.th32ParentProcessID), e.szExeFile.lower())
+            ok = kernel32.Process32NextW(snap, ctypes.byref(e))
+    finally:
+        kernel32.CloseHandle(snap)
+    return out
+
+
+def tree_root(pid: int, table: dict[int, tuple[int, str]]) -> int:
+    """The top process of ``pid``'s app: parents with the same exe name are walked up (a browser's tab or
+    audio-service process -> the main browser process, whose tree holds all of them)."""
+    exe = table.get(pid, (0, ""))[1]
+    seen = {pid}
+    while exe:
+        parent = table.get(pid, (0, ""))[0]
+        if not parent or parent in seen or table.get(parent, (0, ""))[1] != exe:
+            break
+        seen.add(parent)
+        pid = parent
+    return pid
+
+
+def app_root_pid(pid: int = 0, exes: tuple[str, ...] | list[str] = (),
+                 table: dict[int, tuple[int, str]] | None = None) -> int:
+    """PID whose process tree is the app: ``pid`` when it is known (foreground window), else the first
+    running process named in ``exes``; 0 when none runs. Never our own process."""
+    table = process_table() if table is None else table
+    if not pid or pid not in table:
+        want = {x.lower() for x in exes if x}
+        pid = next((p for p, (_pp, exe) in sorted(table.items()) if exe in want and p != OWN_PID), 0)
+    if not pid or pid == OWN_PID:
+        return 0
+    root = tree_root(pid, table)
+    return 0 if root == OWN_PID else root
+
+
 # ---------------------------------------------------------------- app details for the UI
 def file_description(path: str) -> str:
     """The FileDescription in an exe's version resource (e.g. "Spotify"), or ''."""

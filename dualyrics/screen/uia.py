@@ -12,6 +12,7 @@ from __future__ import annotations
 import ctypes
 import logging
 import sys
+import threading
 import time
 from typing import Any, Iterable
 
@@ -23,17 +24,19 @@ IGNORE_CASE = 1
 TIMEOUT_MS = 800            # UIA connection / transaction timeouts: a hung app must not stall the reader
 
 _mod: Any = None
+_mod_lock = threading.Lock()
 
 
 def _uia_module() -> Any:
     global _mod
-    if _mod is None:
-        if "comtypes" not in sys.modules:
-            sys.coinit_flags = 0      # type: ignore[attr-defined]  # COINIT_MULTITHREADED for the importing thread
-        import comtypes.client
+    with _mod_lock:   # the screen reader and the Live Captions reader may start together: generate it once
+        if _mod is None:
+            if "comtypes" not in sys.modules:
+                sys.coinit_flags = 0      # type: ignore[attr-defined]  # COINIT_MULTITHREADED for the importing thread
+            import comtypes.client
 
-        _mod = comtypes.client.GetModule("UIAutomationCore.dll")
-    return _mod
+            _mod = comtypes.client.GetModule("UIAutomationCore.dll")
+        return _mod
 
 
 def com_init() -> None:
@@ -55,21 +58,28 @@ def available() -> bool:
         return False
 
 
+def create_automation() -> tuple[Any, Any]:
+    """(UIAutomationCore wrapper module, IUIAutomation) for this thread, with short timeouts so a hung app
+    never stalls the reader. Also used by the Windows Live Captions reader (live/wincaptions.py)."""
+    m = _uia_module()          # first: it makes comtypes join the multithreaded apartment when it is imported
+    com_init()
+    import comtypes.client
+
+    automation = comtypes.client.CreateObject(m.CUIAutomation, interface=m.IUIAutomation)
+    try:
+        u2 = automation.QueryInterface(m.IUIAutomation2)
+        u2.ConnectionTimeout = TIMEOUT_MS
+        u2.TransactionTimeout = TIMEOUT_MS
+    except Exception:
+        pass
+    return m, automation
+
+
 class UiaReader:
     """Use from one thread."""
 
     def __init__(self) -> None:
-        com_init()
-        import comtypes.client
-
-        self.m = _uia_module()
-        self.uia = comtypes.client.CreateObject(self.m.CUIAutomation, interface=self.m.IUIAutomation)
-        try:
-            u2 = self.uia.QueryInterface(self.m.IUIAutomation2)
-            u2.ConnectionTimeout = TIMEOUT_MS
-            u2.TransactionTimeout = TIMEOUT_MS
-        except Exception:
-            pass
+        self.m, self.uia = create_automation()
         self._text_cond = self.uia.CreatePropertyCondition(self.m.UIA_ControlTypePropertyId,
                                                            self.m.UIA_TextControlTypeId)
         self._classes: tuple[str, ...] = ()

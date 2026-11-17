@@ -1,5 +1,7 @@
-"""Playback of dubbed speech: PCM through ``waveOut`` (Gemini, Piper, Gemini Live streams), MP3 through MCI
-(Edge voices). Both play in our own process, so ducking never lowers them. Use one ``Player`` from one thread.
+"""Playback of dubbed speech through ``waveOut``, in our own process (so ducking never lowers it): PCM from
+Gemini, Piper and Gemini Live streams, and MP3 from the Edge voices decoded without Media Foundation (Windows
+"N" editions have none): pyminiaudio's dr_mp3 (bundled), else PyAV (comes with Live mode), and MCI only when
+neither can decode. Use one ``Player`` from one thread.
 """
 
 from __future__ import annotations
@@ -145,6 +147,23 @@ class WaveOut:
             _winmm.waveOutClose(self._h)
 
 
+def decode_mp3(data: bytes, rate: int = 24000) -> tuple[bytes, int] | None:
+    """MP3 -> (16-bit mono PCM, rate): dr_mp3 through pyminiaudio, then PyAV; None when neither works."""
+    return _decode_miniaudio(data, rate) or _decode_mp3(data, rate)
+
+
+def _decode_miniaudio(data: bytes, rate: int = 24000) -> tuple[bytes, int] | None:
+    """MP3 -> 16-bit mono PCM with pyminiaudio (dr_mp3, no system codec); None when unavailable or broken."""
+    try:
+        import miniaudio  # type: ignore
+
+        d = miniaudio.decode(data, output_format=miniaudio.SampleFormat.SIGNED16, nchannels=1, sample_rate=rate)
+        pcm = d.samples.tobytes()
+        return (pcm, int(d.sample_rate)) if pcm else None
+    except Exception:  # noqa: BLE001 - optional path, PyAV and MCI follow
+        return None
+
+
 def _decode_mp3(data: bytes, rate: int = 24000) -> tuple[bytes, int] | None:
     """MP3 -> 16-bit mono PCM with PyAV; None when PyAV is not available or decoding fails."""
     try:
@@ -234,9 +253,9 @@ class Player:
             out.stop()
 
     def _play_mp3(self, data: bytes, volume: float) -> bool:
-        # Windows "N" editions ship without the MP3 (mpegvideo) MCI driver -> MCI error 266. Decode with PyAV
-        # (installed with Live mode) and play the PCM through waveOut, which every edition has; MCI stays the fallback.
-        pcm = _decode_mp3(data)
+        # Windows "N" editions ship without the MP3 (mpegvideo) MCI driver -> MCI error 266. Decode with dr_mp3
+        # (pyminiaudio) or PyAV and play the PCM through waveOut, which every edition has; MCI stays the fallback.
+        pcm = decode_mp3(data)
         if pcm:
             return self._play_pcm(pcm[0], pcm[1], volume)
         self.tmp.mkdir(parents=True, exist_ok=True)

@@ -93,7 +93,7 @@ class Cache:
                                                          "provider": provider, "at": time.time()})
 
     def drop_translation(self, key: str, target: str) -> None:
-        for provider in ("gemini", "free", "none"):
+        for provider in ("gemini", "free", "offline", "none"):
             try:
                 self._tpath(key, target, provider).unlink()
             except OSError:

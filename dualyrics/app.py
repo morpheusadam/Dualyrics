@@ -25,10 +25,13 @@ from dualyrics.control import Controller
 from dualyrics.dub import scheduler as dub_sch
 from dualyrics.dub.controller import Dubber, Feed
 from dualyrics.hotkeys import HotkeyManager
-from dualyrics.live import deps as live_deps
+from dualyrics.keypool import KeyPool
+from dualyrics.linecache import LineStore
+from dualyrics.live import deps as live_deps, wincaptions
 from dualyrics.live.engine import LiveEngine
 from dualyrics.lyrics import LyricsClient, LyricsResult
 from dualyrics.media import MediaWatcher, Track
+from dualyrics.offline import OfflineTranslator
 from dualyrics.overlay import Content, Overlay
 from dualyrics.screen.engine import ScreenReader, Target
 from dualyrics.settings import Settings
@@ -39,7 +42,8 @@ log = logging.getLogger("dualyrics")
 LEAD = 0.20                 # show a line slightly before it is sung (seconds)
 TICK_MS = 100
 NETWORK_RETRY = 30          # seconds before retrying a lyrics lookup that failed on the network
-TRANSLATE_RETRY = 90        # seconds before retrying a failed translation (max 3 times)
+TRANSLATE_RETRY = 90        # seconds before retrying a failed translation (doubling up to TRANSLATE_RETRY_MAX)
+TRANSLATE_RETRY_MAX = 600   # a failed translation is retried for as long as the song plays
 NOT_FOUND_SHOW = 8          # seconds the "no lyrics" notice stays visible
 FG_POLL = 0.5               # seconds between foreground-window checks
 RUN_POLL = 3.0              # seconds between running-process scans
@@ -51,14 +55,17 @@ SCREEN_STOP_GRACE = 4.0     # keep reading the screen this long after the screen
 
 TRANSLATION_KEYS = {"target_language", "provider", "show_translation", "skip_same_language"}
 STRICT_KEYS = {"lyrics_strict_browsers", "lyrics_strict_tolerance"}
-RETRY_KEYS = {"gemini_keys", "gemini_models", "fallback_free", "proxy_mode", "proxy_url"}
+RETRY_KEYS = {"gemini_keys", "gemini_models", "fallback_free", "proxy_mode", "proxy_url", "gemini_keys_off",
+              "offline_enabled"}
 HOTKEY_KEYS = {"hotkeys_enabled", "hotkey_offset_up", "hotkey_offset_down", "hotkey_toggle", "hotkey_live_pause",
                "hotkey_click_through", "hotkey_dub"}
 HOTKEY_COMMANDS = {"offset_up": "offset_up", "offset_down": "offset_down", "toggle": "toggle_visible",
                    "live_pause": "toggle_live_pause", "click_through": "toggle_click_through", "dub": "toggle_dub"}
-NOTICES = {"fallback_model": "us_fallback_model", "fallback_free": "us_fallback_free", "dub_fallback": "dub_fallback"}
+NOTICES = {"fallback_model": "us_fallback_model", "fallback_free": "us_fallback_free", "dub_fallback": "dub_fallback",
+           "fallback_offline": "us_fallback_offline", "keys_resting": "us_keys_resting"}
 LIVE_KEYS = {"live_model", "live_english_only", "live_device", "live_vad_sensitivity", "live_max_segment",
-             "live_context_lines"}
+             "live_context_lines", "live_engine", "live_vad", "live_source_language", "pivot_english",
+             "pivot_show_original", "dub_enabled", "dub_engine", "gemini_keys", "live_capture"}
 PASS_THROUGH = {"enabled": True, "mode": "auto", "kind": "other", "id": "", "name": ""}  # profiles switched off
 GLOBAL_SCOPE_IDS = ("", profiles_mod.DEFAULT_ID, profiles_mod.MEDIA_ANY_ID)  # positions saved globally
 SEEK_JUMP = 3               # more lines than this between ticks = a seek: min display time does not apply
@@ -119,7 +126,13 @@ class App:
         threading.Thread(target=self.cache.prune, daemon=True).start()
         self._session_lock = threading.Lock()
         self._session = net.make_session(self.settings["proxy_mode"], self.settings["proxy_url"])
-        self.translator = Translator(self.session)
+        # v2.2: the key pool (round robin, per-key state, shared projects) and the offline last tier
+        self.keypool = KeyPool(paths.data_dir() / "gemini_keys_state.json")
+        self.keypool.disabled_fn = lambda: self.settings["gemini_keys_off"]
+        self.offline = OfflineTranslator()
+        self.translator = Translator(self.session, self.keypool, self.offline)
+        self.lines = LineStore()           # v2.2: Live and on-screen line translations on disk
+        threading.Thread(target=self.lines.prune, daemon=True).start()
         # v2.1: every Gemini request is counted (Settings > Usage); limits move to the next key or model
         self.usage = usage_mod.UsageMeter()
         threading.Thread(target=self.usage.prune, daemon=True).start()
@@ -127,6 +140,8 @@ class App:
         self.usage.limits_fn = lambda: self.settings["usage_limits"]
         self.usage.on_warning = lambda model, key, used, limit: self.call_soon(
             lambda: self._usage_warning(model, key, used, limit))
+        self.keypool.used_fn = lambda model, key: self.usage.used_today(model, self._key_index(key))
+        self.keypool.limit_fn = lambda model: usage_mod.limit_for(model, self.settings["usage_limits"])
         gem = self.translator.gemini
         gem.meter = self.usage
         gem.key_index = self._key_index
@@ -140,7 +155,7 @@ class App:
         self._stopping = False
         # v2: smart auto mode, per-app profiles, Live mode
         live_deps.activate_runtime()
-        self.live = LiveEngine(self.effective_cfg, self.session, self.translator)
+        self.live = LiveEngine(self.effective_cfg, self.session, self.translator, self.lines)
         # v2.1: auto-dubbing (off by default); it hears the captured audio and never captions its own voice
         self.dub = Dubber(self.effective_cfg, self.session, gem)
         self.dub.on_notice = lambda what, kw: gem.notice(what, **kw)
@@ -149,6 +164,7 @@ class App:
         self.auto = automode.AutoSwitch()
         self.decision = automode.Decision(automode.LYRICS, "start")
         self._fg = procs.Foreground(None)
+        self._cap_at = 0.0             # last lookup of the app Live records (live_capture = app)
         self._fg_at = -FG_POLL
         self._running: list[profiles_mod.AppRef] = []
         self._run_at = -RUN_POLL
@@ -243,6 +259,7 @@ class App:
 
     def clear_cache(self) -> None:
         self.cache.clear()
+        self.lines.clear()
         self._reload(keep=True)
 
     # ------------------------------------------------------------------ v2.1: usage meter and notices
@@ -303,13 +320,15 @@ class App:
         return dict(cached[2])
 
     def live_ready(self) -> bool:
-        """Live mode is switched on and its packages are installed (checked every few seconds)."""
+        """Live mode is switched on and can run: its packages are installed, or Windows Live Captions can be
+        used (checked every few seconds)."""
         if not self.settings["live_enabled"]:
             return False
         ok, at = self._live_avail
         now = time.monotonic()
         if now - at > DEPS_CHECK:
-            ok = live_deps.available()
+            ok = live_deps.available() or (
+                self.settings["live_engine"] != "whisper" and wincaptions.availability().ok)
             self._live_avail = (ok, now)
         return ok
 
@@ -332,6 +351,8 @@ class App:
         if failed:
             log.warning("hotkeys unavailable: %s", failed)
         threading.Thread(target=self._instance_listener, name="instance", daemon=True).start()
+        # a Live Captions hidden by a run that crashed is taken over, so it is closed again after a while
+        threading.Thread(target=self.live.adopt_orphan, name="live-captions-orphan", daemon=True).start()
         if self.settings["api_enabled"]:
             self.api.start()
         else:
@@ -786,6 +807,9 @@ class App:
         provider = "gemini" if cfg["provider"] == "gemini" and cfg["gemini_keys"] else "free"
         target = cfg["target_language"]
         hit = self.cache.get_translation(key, target, provider)
+        lower = None if hit and len(hit["lines"]) == len(lines) else self._lower_tier_hit(key, target, provider, lines)
+        if lower is not None and not self._can_upgrade(provider, cfg):
+            hit, provider, lower = lower[1], lower[0], None     # the best there is right now, at no cost
         if not self._current(gen):
             return
         edits = dict(st.edits) if st.edits_lang == target else {}
@@ -801,6 +825,10 @@ class App:
             return
         st.translation, st.trans_status = [], "translating"
         st.preview, st.preview_tried, st.preview_busy = dict(edits), set(), False
+        if lower is not None:   # a lower tier's translation is shown until the better one arrives
+            for i, text in enumerate(lower[1]["lines"]):
+                if text and i not in st.preview:
+                    st.preview[i] = str(text)
         try:
             tr = self.translator.translate(lines, track.title, track.artist, cfg,
                                            cancelled=lambda: not self._current(gen))
@@ -815,8 +843,23 @@ class App:
         edits = dict(st.edits) if st.edits_lang == target else {}
         self._store_translation(st, key, target, tr.provider, list(tr.lines), tr.skipped, tr.source_lang, edits)
         log.info("translated with %s (source=%s, skipped=%s)", tr.provider, tr.source_lang or "?", tr.skipped)
-        if provider == "gemini" and tr.provider == "free":
-            self._notice = (i18n.t("st_free_used"), time.time() + 6)
+        if provider == "gemini" and tr.provider in ("free", "offline"):
+            self._notice = (i18n.t("st_offline_used" if tr.provider == "offline" else "st_free_used"), time.time() + 6)
+
+    def _lower_tier_hit(self, key: str, target: str, provider: str, lines: list[str]
+                        ) -> tuple[str, dict[str, Any]] | None:
+        """A cached translation of this song by a lower tier (free Google or offline) with the right length."""
+        for alt in (("free", "offline") if provider == "gemini" else ("offline",)):
+            h = self.cache.get_translation(key, target, alt)
+            if h and len(h["lines"]) == len(lines):
+                return alt, h
+        return None
+
+    def _can_upgrade(self, provider: str, cfg: dict[str, Any]) -> bool:
+        """The preferred translator can be asked now (else a lower tier's cached translation is used as it is)."""
+        if provider == "gemini":
+            return self.translator.gemini.can_ask(cfg["gemini_keys"], cfg["gemini_models"])
+        return not self.translator.free.resting()
 
     def _store_translation(self, st: SongState, key: str, target: str, provider: str, lines: list[str],
                            skipped: bool, source: str, edits: dict[int, str]) -> None:
@@ -870,8 +913,9 @@ class App:
         elif track and st.status == "st_network" and now - st.error_at > NETWORK_RETRY:
             st.error_at = now
             self._start_load(track, keep=True)
-        elif track and st.trans_status == "failed" and st.trans_retries < 3 and now - st.trans_error_at > TRANSLATE_RETRY:
-            st.trans_retries += 1
+        elif track and st.trans_status == "failed" and now - st.trans_error_at > min(
+                TRANSLATE_RETRY_MAX, TRANSLATE_RETRY * 2 ** min(st.trans_retries, 4)):
+            st.trans_retries += 1       # never gives up while the song plays: 90 s, 3 min, 6 min, then every 10 min
             st.trans_error_at = now
             self._start_load(track, keep=True)
 
@@ -1082,7 +1126,29 @@ class App:
             where = m.profile.get("name", "")
         tr = self.media.track
         title = f"{tr.artist} — {tr.title}" if tr and self.media.playing else ""
+        self._update_capture_target()
         self.live.start(where, title)
+
+    def _update_capture_target(self) -> None:
+        """live_capture = app: the PID whose process tree Live records (the active profile's app; 0 = none
+        known, then everything except Dualyrics is recorded). Read by the capture thread."""
+        if self.settings["live_capture"] != "app" or self.live.engine == "live_captions":
+            self.live.capture_target = 0      # Live Captions records nothing itself: no process snapshot needed
+            return
+        now = time.monotonic()
+        if now - self._cap_at < 1.0:
+            return
+        self._cap_at = now
+        m, fg = self.match, self._fg
+        pid = fg.pid if m.via in ("foreground", "fullscreen") and fg.app is not None else 0
+        exes = list(m.profile.get("exes") or ())
+        media_app = (self.media.track.app if self.media.track else "") or ""
+        if m.via == "media" and media_app.lower().endswith(".exe"):
+            exes.append(media_app.lower())
+        try:
+            self.live.capture_target = procs.app_root_pid(pid, exes) if (pid or exes) else 0
+        except Exception:
+            log.debug("capture target lookup failed", exc_info=True)
 
     def _idle_live(self, now: float) -> None:
         if self.live.running:
@@ -1106,7 +1172,12 @@ class App:
         status = notice if has_notice else (i18n.t(v.status, **v.status_kw) if v.status else "")
         if not v.visible:
             return Content(status=status, song=song) if has_notice else None
-        return Content(original=v.original, translation=v.translation, next=v.extra, status=status, song=song)
+        preview = getattr(v, "preview", "")
+        if preview and not (v.original or v.translation):
+            status = status or preview      # alone: the dim status line of the template
+            preview = ""
+        return Content(original=v.original, translation=v.translation, next=v.extra or preview, status=status,
+                       song=song)
 
     def _current_view(self) -> Any:
         if self.decision.mode == automode.SCREEN:
