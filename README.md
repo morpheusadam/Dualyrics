@@ -14,7 +14,7 @@ Any language you hear → English + your own language. 40+ target languages.</p>
 </p>
 
 <p align="center">
-<img src="docs/hero.gif" width="840" alt="Dualyrics overlay over a city at night: an English lyric with its Persian translation in the Liquid Glass look, a karaoke line filling with colour above a Spanish translation, a Japanese film line with Persian and English under it, and a German game line with Turkish and English under it">
+<img src="docs/hero.gif" width="840" alt="Dualyrics overlay over a city at night, recorded from the real app: an English lyric with its Persian translation in the Liquid Glass look, a karaoke line filling with colour and the next line fading in, then a film line in the Cinema look changing to a Japanese line with Persian and English under it">
 </p>
 
 <p align="center">
@@ -54,6 +54,8 @@ Dualyrics works without any key, through the free Google Translate endpoint. A G
 4. In Dualyrics open **Settings › Translation**, set **Translation provider** to **Gemini**, paste the key into the keys box and press **Test**.
 
 The free tier has daily request limits per model, which Google sets and changes from time to time. A song normally costs one request, translations are cached (whole songs, and every Live or on-screen line, so a replayed video costs nothing), and songs already in your language are skipped. You can add several keys and models: requests take turns over the keys that are switched on, so no key is used up first, and a key that reached its daily quota rests until the reset (midnight Pacific) without being asked again. **Settings › Translation** shows each key's state, today's requests and tokens, a switch and a **Test** button. Google counts the quota per Cloud project, so keys only add quota when they come from different projects or accounts: for each extra key, pick a new project when you click **Create API key** (or use another Google account). Dualyrics warns when two keys seem to share one project. When every key rests, the free Google translator takes over at once, and when that fails too, the optional offline translator (Argos Translate language models that run on your PC), so subtitles never stop. Keys are encrypted with Windows DPAPI for your Windows user and never leave your PC except in requests to Google. **Settings › Usage** shows how much of each daily limit you have used.
+
+<p align="center"><img src="docs/screenshots/settings-translation.png" width="640" alt="Settings, Translation, Keys now: sample Gemini keys shown masked (AIza…XXX1 to XXX3), one ready, one rate limited and one with its daily quota used up, each with today's requests and tokens, a Test button and a switch"></p>
 
 ## What you can use it for
 
@@ -126,7 +128,7 @@ Live mode's speech packages (about 150 MB, or about 1 GB more with NVIDIA GPU su
 
 In Smart auto mode, live captions start by themselves for fullscreen games, apps added as **Game**, and songs or videos without lyrics or subtitles. Pause with `Ctrl+Alt+P`.
 
-<p align="center"><img src="docs/screenshots/settings-live.png" width="640" alt="Settings, Live mode: installation status, the Update Live mode button with an NVIDIA GPU option, switches for live captions and songs without lyrics, and the speech model"></p>
+<p align="center"><img src="docs/screenshots/settings-live.png" width="640" alt="Settings, Live mode, Speech recognition: the speech engine set to Windows Live Captions with its status, what to listen to, the Whisper speech model, the English-only switch, the spoken language and where it runs"></p>
 
 ## Templates
 
@@ -171,7 +173,7 @@ Dubbing reads the translation aloud. It is off by default; turn it on in **Setti
 
 **Automatic** picks Gemini Live for game and film audio and Gemini voices for text when you have a key, otherwise Edge, otherwise Piper. An engine that fails hands the line to the next one. Choose a **female or male voice** for each target language (for Persian, Dilara or Farid). Edge's MP3 speech is decoded inside the app, so it also plays on Windows "N" editions without the Media Feature Pack.
 
-<p align="center"><img src="docs/screenshots/settings-dubbing.png" width="640" alt="Settings, Dubbing: the speak-the-translation switch (off), what is spoken, and the voice engine"></p>
+<p align="center"><img src="docs/screenshots/settings-dubbing.png" width="640" alt="Settings, Dubbing, Voice: the engine and the voice on Automatic, a female or male voice for Persian, speed, voice volume and the Test the voice button"></p>
 
 ## Gemini usage meter
 
