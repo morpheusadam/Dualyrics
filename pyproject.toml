@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dualyrics"
+version = "1.0.0"
+description = "Synced song lyrics with a live translation under every line, as a floating overlay for Windows (Spotify, YouTube Music, Spotube and any media-controls player)."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+authors = [{ name = "Dualyrics contributors" }]
+keywords = ["lyrics", "synced lyrics", "lyrics translation", "translate lyrics", "spotify lyrics",
+            "youtube music lyrics", "lrclib", "gemini", "overlay", "windows", "karaoke", "language learning"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Win32 (MS Windows)",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows :: Windows 10",
+    "Operating System :: Microsoft :: Windows :: Windows 11",
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Sound/Audio :: Players",
+    "Topic :: Text Processing :: Linguistic",
+]
+dependencies = [
+    "requests>=2.31",
+    "PySocks>=1.7.1",
+    "customtkinter>=5.2",
+    "pystray>=0.19.5",
+    "Pillow>=10.0",
+    "winrt-runtime>=2.0",
+    "winrt-Windows.Foundation>=2.0",
+    "winrt-Windows.Foundation.Collections>=2.0",
+    "winrt-Windows.Media.Control>=2.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.gui-scripts]
+dualyrics = "dualyrics.app:main"
+
+[tool.setuptools]
+packages = ["dualyrics"]
+
+[tool.setuptools.package-data]
+dualyrics = ["assets/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
