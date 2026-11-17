@@ -37,6 +37,8 @@ class Tray:
             self._item("show_lyrics", "toggle_visible", checked="visible"),
             self._item("settings", "settings", default=True),
             self._item("retranslate", "retranslate"),
+            self._item("translation_only", "toggle_translation_only", checked="translation_only"),
+            self._item("live_pause", "toggle_live_pause", checked="live_paused"),
             pystray.Menu.SEPARATOR,
             self._item("click_through", "toggle_click_through", checked="click_through"),
             self._item("lock_position", "toggle_locked", checked="locked"),

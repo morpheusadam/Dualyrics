@@ -1,0 +1,711 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "dualyrics.template/1",
+  "title": "Dualyrics subtitle template",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "id",
+    "name",
+    "scale",
+    "layout",
+    "container",
+    "lines",
+    "karaoke",
+    "animation",
+    "timing"
+  ],
+  "properties": {
+    "schema": {
+      "const": "dualyrics.template/1"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]{1,39}$"
+    },
+    "name": {
+      "$ref": "#/$defs/localized"
+    },
+    "description": {
+      "$ref": "#/$defs/localized"
+    },
+    "builtin": {
+      "type": "boolean",
+      "default": false
+    },
+    "based_on": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "id of the preset this template was copied from"
+    },
+    "scale": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "reference_height"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "fixed",
+            "dpi",
+            "screen"
+          ],
+          "description": "fixed = px as written; dpi = px x monitor DPI scale; screen = px x (monitor height / reference_height)"
+        },
+        "reference_height": {
+          "type": "integer",
+          "minimum": 480,
+          "maximum": 4320
+        }
+      }
+    },
+    "layout": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "translation_position",
+        "mirror_for_rtl"
+      ],
+      "properties": {
+        "translation_position": {
+          "enum": [
+            "below",
+            "above"
+          ]
+        },
+        "mirror_for_rtl": {
+          "type": "boolean",
+          "description": "start/end alignment follows the direction of each line"
+        }
+      }
+    },
+    "container": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "background",
+        "blur",
+        "padding",
+        "corner_radius",
+        "border",
+        "shadow",
+        "width",
+        "align",
+        "line_gap",
+        "group_gap"
+      ],
+      "properties": {
+        "background": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "color",
+            "opacity",
+            "gradient"
+          ],
+          "properties": {
+            "color": {
+              "$ref": "#/$defs/color"
+            },
+            "opacity": {
+              "$ref": "#/$defs/unit"
+            },
+            "gradient": {
+              "$ref": "#/$defs/gradientOrNull"
+            }
+          }
+        },
+        "blur": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode",
+            "strength",
+            "noise",
+            "sheen"
+          ],
+          "properties": {
+            "mode": {
+              "enum": [
+                "none",
+                "simulated",
+                "acrylic"
+              ],
+              "description": "simulated = tint + sheen + noise, no real blur; acrylic = DWM blur-behind when available, else simulated"
+            },
+            "strength": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 40
+            },
+            "noise": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 0.1
+            },
+            "sheen": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 0.3
+            }
+          }
+        },
+        "padding": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "x",
+            "y"
+          ],
+          "properties": {
+            "x": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 80
+            },
+            "y": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 80
+            }
+          }
+        },
+        "corner_radius": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 48
+        },
+        "border": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "width",
+            "color",
+            "opacity"
+          ],
+          "properties": {
+            "width": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 6
+            },
+            "color": {
+              "$ref": "#/$defs/color"
+            },
+            "opacity": {
+              "$ref": "#/$defs/unit"
+            }
+          }
+        },
+        "shadow": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/shadow"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "width": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "unit",
+            "value",
+            "fit_content",
+            "min_px"
+          ],
+          "properties": {
+            "unit": {
+              "enum": [
+                "px",
+                "percent"
+              ]
+            },
+            "value": {
+              "type": "number",
+              "minimum": 10,
+              "maximum": 4000
+            },
+            "fit_content": {
+              "type": "boolean",
+              "description": "true = the box hugs the longest line and value is the maximum"
+            },
+            "min_px": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 2000
+            }
+          }
+        },
+        "align": {
+          "enum": [
+            "center",
+            "start",
+            "end",
+            "left",
+            "right"
+          ]
+        },
+        "line_gap": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 48
+        },
+        "group_gap": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 64,
+          "description": "extra space before the next-line block"
+        }
+      }
+    },
+    "lines": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "original",
+        "translation",
+        "next",
+        "speaker"
+      ],
+      "properties": {
+        "original": {
+          "$ref": "#/$defs/lineStyle"
+        },
+        "translation": {
+          "$ref": "#/$defs/lineStyle"
+        },
+        "next": {
+          "$ref": "#/$defs/lineStyle"
+        },
+        "speaker": {
+          "$ref": "#/$defs/speakerStyle"
+        }
+      }
+    },
+    "karaoke": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "mode",
+        "applies_to",
+        "highlight_color",
+        "highlight_gradient",
+        "inactive_opacity",
+        "glow"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "mode": {
+          "enum": [
+            "line",
+            "sweep",
+            "word"
+          ],
+          "description": "line = active line recoloured; sweep = fill moves across the line over its duration; word = word timestamps when the LRC has them, else sweep"
+        },
+        "applies_to": {
+          "enum": [
+            "original",
+            "translation",
+            "both"
+          ]
+        },
+        "highlight_color": {
+          "$ref": "#/$defs/color"
+        },
+        "highlight_gradient": {
+          "$ref": "#/$defs/gradientOrNull"
+        },
+        "inactive_opacity": {
+          "$ref": "#/$defs/unit"
+        },
+        "glow": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/shadow"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "animation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enter",
+        "exit",
+        "duration_ms",
+        "exit_duration_ms",
+        "slide_px",
+        "easing",
+        "reduced_motion"
+      ],
+      "properties": {
+        "enter": {
+          "$ref": "#/$defs/motion"
+        },
+        "exit": {
+          "$ref": "#/$defs/motion"
+        },
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000
+        },
+        "exit_duration_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000
+        },
+        "slide_px": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 48
+        },
+        "easing": {
+          "enum": [
+            "linear",
+            "ease_out",
+            "ease_in_out",
+            "ease_out_back"
+          ]
+        },
+        "reduced_motion": {
+          "enum": [
+            "respect",
+            "ignore"
+          ],
+          "description": "respect = slides become fades when Windows animation effects are off"
+        }
+      }
+    },
+    "timing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "min_display_ms"
+      ],
+      "properties": {
+        "min_display_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000
+        }
+      }
+    },
+    "hints": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "offered (never forced) when the user picks the template",
+      "properties": {
+        "placement": {
+          "enum": [
+            "keep",
+            "bottom",
+            "top",
+            "center"
+          ]
+        },
+        "click_through": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "locked": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      }
+    }
+  },
+  "$defs": {
+    "color": {
+      "type": "string",
+      "pattern": "^#[0-9A-Fa-f]{6}$"
+    },
+    "unit": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "localized": {
+      "type": "object",
+      "required": [
+        "en"
+      ],
+      "propertyNames": {
+        "pattern": "^[a-z]{2,3}(-[A-Za-z]{2,4})?$"
+      },
+      "additionalProperties": {
+        "type": "string",
+        "maxLength": 200
+      }
+    },
+    "fontStack": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 6,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 100
+      },
+      "description": "first installed family wins; \"auto\" = the built-in stack for that script"
+    },
+    "gradient": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "angle",
+        "stops"
+      ],
+      "properties": {
+        "angle": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 360,
+          "description": "0 = left to right, 90 = top to bottom"
+        },
+        "stops": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 4,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "offset",
+              "color"
+            ],
+            "properties": {
+              "offset": {
+                "$ref": "#/$defs/unit"
+              },
+              "color": {
+                "$ref": "#/$defs/color"
+              }
+            }
+          }
+        }
+      }
+    },
+    "gradientOrNull": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/gradient"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "shadow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "x",
+        "y",
+        "blur",
+        "color",
+        "opacity"
+      ],
+      "properties": {
+        "x": {
+          "type": "number",
+          "minimum": -20,
+          "maximum": 20
+        },
+        "y": {
+          "type": "number",
+          "minimum": -20,
+          "maximum": 20
+        },
+        "blur": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 40
+        },
+        "color": {
+          "$ref": "#/$defs/color"
+        },
+        "opacity": {
+          "$ref": "#/$defs/unit"
+        }
+      }
+    },
+    "motion": {
+      "enum": [
+        "none",
+        "fade",
+        "slide_up",
+        "slide_down",
+        "fade_slide_up",
+        "fade_slide_down"
+      ]
+    },
+    "lineBase": {
+      "type": "object",
+      "required": [
+        "visible",
+        "font",
+        "color",
+        "gradient",
+        "opacity",
+        "outline",
+        "shadow",
+        "letter_spacing",
+        "line_height",
+        "max_lines",
+        "uppercase"
+      ],
+      "properties": {
+        "visible": {
+          "type": "boolean"
+        },
+        "font": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "latin",
+            "rtl",
+            "size",
+            "weight",
+            "italic"
+          ],
+          "properties": {
+            "latin": {
+              "$ref": "#/$defs/fontStack"
+            },
+            "rtl": {
+              "$ref": "#/$defs/fontStack"
+            },
+            "size": {
+              "type": "number",
+              "minimum": 8,
+              "maximum": 120
+            },
+            "weight": {
+              "type": "integer",
+              "minimum": 100,
+              "maximum": 900,
+              "multipleOf": 100
+            },
+            "italic": {
+              "type": "boolean",
+              "description": "never applied to right-to-left scripts"
+            }
+          }
+        },
+        "color": {
+          "$ref": "#/$defs/color"
+        },
+        "gradient": {
+          "$ref": "#/$defs/gradientOrNull"
+        },
+        "opacity": {
+          "$ref": "#/$defs/unit"
+        },
+        "outline": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "width",
+            "color",
+            "opacity"
+          ],
+          "properties": {
+            "width": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 8
+            },
+            "color": {
+              "$ref": "#/$defs/color"
+            },
+            "opacity": {
+              "$ref": "#/$defs/unit"
+            }
+          }
+        },
+        "shadow": {
+          "type": "array",
+          "maxItems": 4,
+          "items": {
+            "$ref": "#/$defs/shadow"
+          },
+          "description": "drawn bottom-up; zero offset + blur = glow"
+        },
+        "letter_spacing": {
+          "type": "number",
+          "minimum": -2,
+          "maximum": 12,
+          "description": "px; ignored for joined scripts (Persian, Arabic, Urdu...)"
+        },
+        "line_height": {
+          "type": "number",
+          "minimum": 0.8,
+          "maximum": 2.5
+        },
+        "max_lines": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8
+        },
+        "uppercase": {
+          "type": "boolean",
+          "description": "no effect on scripts without case"
+        }
+      }
+    },
+    "lineStyle": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/lineBase"
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "speakerStyle": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/lineBase"
+        }
+      ],
+      "required": [
+        "format",
+        "placement"
+      ],
+      "properties": {
+        "format": {
+          "type": "string",
+          "pattern": "\\{name\\}",
+          "maxLength": 40
+        },
+        "placement": {
+          "enum": [
+            "inline",
+            "above"
+          ]
+        }
+      },
+      "unevaluatedProperties": false
+    }
+  }
+}

@@ -1,0 +1,225 @@
+{
+  "schema": "dualyrics.template/1",
+  "id": "netflix",
+  "name": {
+    "en": "Netflix",
+    "fa": "نتفلیکس"
+  },
+  "description": {
+    "en": "Clean streaming look: plain white text in a tight dark box that hugs the line.",
+    "fa": "ظاهر تمیز سرویس‌های استریم: متن سفید ساده در یک کادر تیره‌ی جمع‌وجور."
+  },
+  "builtin": true,
+  "based_on": null,
+  "scale": {
+    "mode": "screen",
+    "reference_height": 1080
+  },
+  "layout": {
+    "translation_position": "below",
+    "mirror_for_rtl": true
+  },
+  "container": {
+    "background": {
+      "color": "#000000",
+      "opacity": 0.75,
+      "gradient": null
+    },
+    "blur": {
+      "mode": "none",
+      "strength": 0,
+      "noise": 0,
+      "sheen": 0
+    },
+    "padding": {
+      "x": 18,
+      "y": 10
+    },
+    "corner_radius": 6,
+    "border": {
+      "width": 0,
+      "color": "#FFFFFF",
+      "opacity": 0
+    },
+    "shadow": null,
+    "width": {
+      "unit": "percent",
+      "value": 70,
+      "fit_content": true,
+      "min_px": 0
+    },
+    "align": "center",
+    "line_gap": 4,
+    "group_gap": 8
+  },
+  "lines": {
+    "original": {
+      "visible": true,
+      "font": {
+        "latin": [
+          "Segoe UI Variable Text",
+          "Segoe UI",
+          "Arial"
+        ],
+        "rtl": [
+          "Vazirmatn",
+          "Segoe UI",
+          "Tahoma"
+        ],
+        "size": 30,
+        "weight": 500,
+        "italic": false
+      },
+      "color": "#FFFFFF",
+      "gradient": null,
+      "opacity": 1.0,
+      "outline": {
+        "width": 0,
+        "color": "#000000",
+        "opacity": 1.0
+      },
+      "shadow": [
+        {
+          "x": 0,
+          "y": 1,
+          "blur": 2,
+          "color": "#000000",
+          "opacity": 0.5
+        }
+      ],
+      "letter_spacing": 0,
+      "line_height": 1.2,
+      "max_lines": 2,
+      "uppercase": false
+    },
+    "translation": {
+      "visible": true,
+      "font": {
+        "latin": [
+          "Segoe UI Variable Text",
+          "Segoe UI",
+          "Arial"
+        ],
+        "rtl": [
+          "Vazirmatn",
+          "Segoe UI",
+          "Tahoma"
+        ],
+        "size": 28,
+        "weight": 400,
+        "italic": false
+      },
+      "color": "#E6E6E6",
+      "gradient": null,
+      "opacity": 1.0,
+      "outline": {
+        "width": 0,
+        "color": "#000000",
+        "opacity": 1.0
+      },
+      "shadow": [
+        {
+          "x": 0,
+          "y": 1,
+          "blur": 2,
+          "color": "#000000",
+          "opacity": 0.5
+        }
+      ],
+      "letter_spacing": 0,
+      "line_height": 1.25,
+      "max_lines": 2,
+      "uppercase": false
+    },
+    "next": {
+      "visible": false,
+      "font": {
+        "latin": [
+          "Segoe UI Variable Text",
+          "Segoe UI",
+          "Arial"
+        ],
+        "rtl": [
+          "Vazirmatn",
+          "Segoe UI",
+          "Tahoma"
+        ],
+        "size": 20,
+        "weight": 400,
+        "italic": false
+      },
+      "color": "#BDBDBD",
+      "gradient": null,
+      "opacity": 1.0,
+      "outline": {
+        "width": 0,
+        "color": "#000000",
+        "opacity": 1.0
+      },
+      "shadow": [],
+      "letter_spacing": 0,
+      "line_height": 1.2,
+      "max_lines": 1,
+      "uppercase": false
+    },
+    "speaker": {
+      "visible": true,
+      "font": {
+        "latin": [
+          "Segoe UI Variable Text",
+          "Segoe UI",
+          "Arial"
+        ],
+        "rtl": [
+          "Vazirmatn",
+          "Segoe UI",
+          "Tahoma"
+        ],
+        "size": 22,
+        "weight": 600,
+        "italic": false
+      },
+      "color": "#BDBDBD",
+      "gradient": null,
+      "opacity": 1.0,
+      "outline": {
+        "width": 0,
+        "color": "#000000",
+        "opacity": 1.0
+      },
+      "shadow": [],
+      "letter_spacing": 0,
+      "line_height": 1.2,
+      "max_lines": 1,
+      "uppercase": false,
+      "format": "[{name}]",
+      "placement": "inline"
+    }
+  },
+  "karaoke": {
+    "enabled": false,
+    "mode": "line",
+    "applies_to": "original",
+    "highlight_color": "#FFFFFF",
+    "highlight_gradient": null,
+    "inactive_opacity": 0.6,
+    "glow": null
+  },
+  "animation": {
+    "enter": "fade",
+    "exit": "fade",
+    "duration_ms": 120,
+    "exit_duration_ms": 80,
+    "slide_px": 0,
+    "easing": "ease_out",
+    "reduced_motion": "respect"
+  },
+  "timing": {
+    "min_display_ms": 1000
+  },
+  "hints": {
+    "placement": "keep",
+    "click_through": null,
+    "locked": null
+  }
+}

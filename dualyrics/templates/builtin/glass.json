@@ -1,0 +1,243 @@
+{
+  "schema": "dualyrics.template/1",
+  "id": "glass",
+  "name": {
+    "en": "Glass",
+    "fa": "شیشه‌ای"
+  },
+  "description": {
+    "en": "Frosted glass panel: smoky tint, thin light rim and soft depth. Uses real blur-behind when Windows allows it.",
+    "fa": "پنل شیشه‌ی مات: رنگ دودی، لبه‌ی روشن باریک و سایه‌ی نرم؛ اگر ویندوز اجازه بدهد پشتش واقعاً تار می‌شود."
+  },
+  "builtin": true,
+  "based_on": null,
+  "scale": {
+    "mode": "screen",
+    "reference_height": 1080
+  },
+  "layout": {
+    "translation_position": "below",
+    "mirror_for_rtl": true
+  },
+  "container": {
+    "background": {
+      "color": "#1E293B",
+      "opacity": 0.74,
+      "gradient": {
+        "angle": 90,
+        "stops": [
+          {
+            "offset": 0,
+            "color": "#2B3A50"
+          },
+          {
+            "offset": 1,
+            "color": "#0F172A"
+          }
+        ]
+      }
+    },
+    "blur": {
+      "mode": "acrylic",
+      "strength": 18,
+      "noise": 0.03,
+      "sheen": 0.1
+    },
+    "padding": {
+      "x": 26,
+      "y": 16
+    },
+    "corner_radius": 18,
+    "border": {
+      "width": 1,
+      "color": "#FFFFFF",
+      "opacity": 0.22
+    },
+    "shadow": {
+      "x": 0,
+      "y": 10,
+      "blur": 30,
+      "color": "#000000",
+      "opacity": 0.35
+    },
+    "width": {
+      "unit": "percent",
+      "value": 62,
+      "fit_content": true,
+      "min_px": 0
+    },
+    "align": "center",
+    "line_gap": 6,
+    "group_gap": 10
+  },
+  "lines": {
+    "original": {
+      "visible": true,
+      "font": {
+        "latin": [
+          "Segoe UI Variable Display",
+          "Segoe UI",
+          "Arial"
+        ],
+        "rtl": [
+          "Vazirmatn",
+          "Segoe UI",
+          "Tahoma"
+        ],
+        "size": 30,
+        "weight": 600,
+        "italic": false
+      },
+      "color": "#FFFFFF",
+      "gradient": null,
+      "opacity": 1.0,
+      "outline": {
+        "width": 0,
+        "color": "#000000",
+        "opacity": 1.0
+      },
+      "shadow": [
+        {
+          "x": 0,
+          "y": 1,
+          "blur": 2,
+          "color": "#000000",
+          "opacity": 0.45
+        }
+      ],
+      "letter_spacing": 0,
+      "line_height": 1.2,
+      "max_lines": 2,
+      "uppercase": false
+    },
+    "translation": {
+      "visible": true,
+      "font": {
+        "latin": [
+          "Segoe UI Variable Display",
+          "Segoe UI",
+          "Arial"
+        ],
+        "rtl": [
+          "Vazirmatn",
+          "Segoe UI",
+          "Tahoma"
+        ],
+        "size": 28,
+        "weight": 500,
+        "italic": false
+      },
+      "color": "#E0F2FE",
+      "gradient": null,
+      "opacity": 1.0,
+      "outline": {
+        "width": 0,
+        "color": "#000000",
+        "opacity": 1.0
+      },
+      "shadow": [
+        {
+          "x": 0,
+          "y": 1,
+          "blur": 2,
+          "color": "#000000",
+          "opacity": 0.45
+        }
+      ],
+      "letter_spacing": 0,
+      "line_height": 1.25,
+      "max_lines": 2,
+      "uppercase": false
+    },
+    "next": {
+      "visible": true,
+      "font": {
+        "latin": [
+          "Segoe UI Variable Display",
+          "Segoe UI",
+          "Arial"
+        ],
+        "rtl": [
+          "Vazirmatn",
+          "Segoe UI",
+          "Tahoma"
+        ],
+        "size": 20,
+        "weight": 400,
+        "italic": false
+      },
+      "color": "#F1F5F9",
+      "gradient": null,
+      "opacity": 1.0,
+      "outline": {
+        "width": 0,
+        "color": "#000000",
+        "opacity": 1.0
+      },
+      "shadow": [],
+      "letter_spacing": 0,
+      "line_height": 1.2,
+      "max_lines": 1,
+      "uppercase": false
+    },
+    "speaker": {
+      "visible": true,
+      "font": {
+        "latin": [
+          "Segoe UI Variable Display",
+          "Segoe UI",
+          "Arial"
+        ],
+        "rtl": [
+          "Vazirmatn",
+          "Segoe UI",
+          "Tahoma"
+        ],
+        "size": 20,
+        "weight": 700,
+        "italic": false
+      },
+      "color": "#E0F2FE",
+      "gradient": null,
+      "opacity": 1.0,
+      "outline": {
+        "width": 0,
+        "color": "#000000",
+        "opacity": 1.0
+      },
+      "shadow": [],
+      "letter_spacing": 0,
+      "line_height": 1.2,
+      "max_lines": 1,
+      "uppercase": false,
+      "format": "{name}:",
+      "placement": "above"
+    }
+  },
+  "karaoke": {
+    "enabled": false,
+    "mode": "line",
+    "applies_to": "original",
+    "highlight_color": "#BAE6FD",
+    "highlight_gradient": null,
+    "inactive_opacity": 0.6,
+    "glow": null
+  },
+  "animation": {
+    "enter": "fade_slide_up",
+    "exit": "fade",
+    "duration_ms": 240,
+    "exit_duration_ms": 160,
+    "slide_px": 8,
+    "easing": "ease_out",
+    "reduced_motion": "respect"
+  },
+  "timing": {
+    "min_display_ms": 1000
+  },
+  "hints": {
+    "placement": "keep",
+    "click_through": null,
+    "locked": null
+  }
+}

@@ -1,0 +1,275 @@
+{
+  "schema": "dualyrics.template/1",
+  "id": "neon",
+  "name": {
+    "en": "Neon",
+    "fa": "نئون"
+  },
+  "description": {
+    "en": "Glowing cyan and pink tubes on a dark smoked panel. Best on dark scenes and night drives.",
+    "fa": "نوشته‌های درخشان فیروزه‌ای و صورتی روی یک پنل دودی تیره؛ بهترین روی صحنه‌های تاریک."
+  },
+  "builtin": true,
+  "based_on": null,
+  "scale": {
+    "mode": "screen",
+    "reference_height": 1080
+  },
+  "layout": {
+    "translation_position": "below",
+    "mirror_for_rtl": true
+  },
+  "container": {
+    "background": {
+      "color": "#05060F",
+      "opacity": 0.66,
+      "gradient": null
+    },
+    "blur": {
+      "mode": "none",
+      "strength": 0,
+      "noise": 0,
+      "sheen": 0
+    },
+    "padding": {
+      "x": 24,
+      "y": 14
+    },
+    "corner_radius": 18,
+    "border": {
+      "width": 1,
+      "color": "#22D3EE",
+      "opacity": 0.35
+    },
+    "shadow": null,
+    "width": {
+      "unit": "percent",
+      "value": 65,
+      "fit_content": true,
+      "min_px": 0
+    },
+    "align": "center",
+    "line_gap": 6,
+    "group_gap": 10
+  },
+  "lines": {
+    "original": {
+      "visible": true,
+      "font": {
+        "latin": [
+          "Bahnschrift",
+          "Segoe UI",
+          "Arial"
+        ],
+        "rtl": [
+          "Vazirmatn",
+          "Segoe UI",
+          "Tahoma"
+        ],
+        "size": 32,
+        "weight": 600,
+        "italic": false
+      },
+      "color": "#ECFEFF",
+      "gradient": null,
+      "opacity": 1.0,
+      "outline": {
+        "width": 1.5,
+        "color": "#083344",
+        "opacity": 1.0
+      },
+      "shadow": [
+        {
+          "x": 0,
+          "y": 0,
+          "blur": 4,
+          "color": "#22D3EE",
+          "opacity": 1.0
+        },
+        {
+          "x": 0,
+          "y": 0,
+          "blur": 14,
+          "color": "#22D3EE",
+          "opacity": 0.75
+        },
+        {
+          "x": 0,
+          "y": 0,
+          "blur": 30,
+          "color": "#0891B2",
+          "opacity": 0.55
+        }
+      ],
+      "letter_spacing": 0.5,
+      "line_height": 1.15,
+      "max_lines": 2,
+      "uppercase": false
+    },
+    "translation": {
+      "visible": true,
+      "font": {
+        "latin": [
+          "Bahnschrift",
+          "Segoe UI",
+          "Arial"
+        ],
+        "rtl": [
+          "Vazirmatn",
+          "Segoe UI",
+          "Tahoma"
+        ],
+        "size": 26,
+        "weight": 600,
+        "italic": false
+      },
+      "color": "#FFE4E6",
+      "gradient": null,
+      "opacity": 1.0,
+      "outline": {
+        "width": 1.5,
+        "color": "#4C0519",
+        "opacity": 1.0
+      },
+      "shadow": [
+        {
+          "x": 0,
+          "y": 0,
+          "blur": 4,
+          "color": "#FB7185",
+          "opacity": 1.0
+        },
+        {
+          "x": 0,
+          "y": 0,
+          "blur": 14,
+          "color": "#F43F5E",
+          "opacity": 0.7
+        },
+        {
+          "x": 0,
+          "y": 0,
+          "blur": 28,
+          "color": "#BE123C",
+          "opacity": 0.5
+        }
+      ],
+      "letter_spacing": 0,
+      "line_height": 1.25,
+      "max_lines": 2,
+      "uppercase": false
+    },
+    "next": {
+      "visible": true,
+      "font": {
+        "latin": [
+          "Bahnschrift",
+          "Segoe UI",
+          "Arial"
+        ],
+        "rtl": [
+          "Vazirmatn",
+          "Segoe UI",
+          "Tahoma"
+        ],
+        "size": 20,
+        "weight": 400,
+        "italic": false
+      },
+      "color": "#A5F3FC",
+      "gradient": null,
+      "opacity": 0.9,
+      "outline": {
+        "width": 0,
+        "color": "#000000",
+        "opacity": 1.0
+      },
+      "shadow": [
+        {
+          "x": 0,
+          "y": 0,
+          "blur": 8,
+          "color": "#22D3EE",
+          "opacity": 0.5
+        }
+      ],
+      "letter_spacing": 0,
+      "line_height": 1.2,
+      "max_lines": 1,
+      "uppercase": false
+    },
+    "speaker": {
+      "visible": true,
+      "font": {
+        "latin": [
+          "Bahnschrift",
+          "Segoe UI",
+          "Arial"
+        ],
+        "rtl": [
+          "Vazirmatn",
+          "Segoe UI",
+          "Tahoma"
+        ],
+        "size": 20,
+        "weight": 700,
+        "italic": false
+      },
+      "color": "#F5D0FE",
+      "gradient": null,
+      "opacity": 1.0,
+      "outline": {
+        "width": 0,
+        "color": "#000000",
+        "opacity": 1.0
+      },
+      "shadow": [
+        {
+          "x": 0,
+          "y": 0,
+          "blur": 8,
+          "color": "#D946EF",
+          "opacity": 0.7
+        }
+      ],
+      "letter_spacing": 1.5,
+      "line_height": 1.2,
+      "max_lines": 1,
+      "uppercase": true,
+      "format": "{name}:",
+      "placement": "inline"
+    }
+  },
+  "karaoke": {
+    "enabled": false,
+    "mode": "line",
+    "applies_to": "original",
+    "highlight_color": "#F0ABFC",
+    "highlight_gradient": null,
+    "inactive_opacity": 0.6,
+    "glow": {
+      "x": 0,
+      "y": 0,
+      "blur": 14,
+      "color": "#D946EF",
+      "opacity": 0.7
+    }
+  },
+  "animation": {
+    "enter": "fade",
+    "exit": "fade",
+    "duration_ms": 260,
+    "exit_duration_ms": 160,
+    "slide_px": 0,
+    "easing": "ease_out",
+    "reduced_motion": "respect"
+  },
+  "timing": {
+    "min_display_ms": 1000
+  },
+  "hints": {
+    "placement": "keep",
+    "click_through": null,
+    "locked": null
+  }
+}

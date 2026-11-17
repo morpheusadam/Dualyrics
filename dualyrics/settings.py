@@ -16,11 +16,11 @@ import threading
 from pathlib import Path
 from typing import Any, Callable
 
-from dualyrics import langs, paths
+from dualyrics import langs, paths, profiles as profiles_mod
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 DEFAULT_STYLE = (
     "Translate like a gifted song translator, not word for word. Use natural, fluent, everyday language "
@@ -37,9 +37,19 @@ PRESETS = ("bottom", "top", "center", "custom")
 PROVIDERS = ("gemini", "free")
 PROXY_MODES = ("none", "system", "custom")
 UI_LANGUAGES = ("en", "fa")
+MODES = ("auto", "lyrics", "live")
+LIVE_DEVICES = ("auto", "cpu", "gpu")
+LIVE_SIZES = ("tiny", "base", "small", "medium")
+UI_THEMES = ("system", "dark", "light")
+DESKTOP_MODES = ("all", "current")
+BACKDROPS = ("dark", "bright", "game", "checker")
+SECTIONS = ("general", "profiles", "templates", "lyrics", "live", "translation", "monitors", "sync", "network",
+            "about")
+_TEMPLATE_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{1,39}$")
 
 _COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
 _PROXY = re.compile(r"^(https?|socks5h?|socks4a?)://[^\s/]+(:\d{1,5})?/?$", re.I)
+_MODEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
 
 
 def _default_ui_language() -> str:
@@ -105,6 +115,38 @@ def defaults() -> dict[str, Any]:
         # network
         "proxy_mode": "system",
         "proxy_url": "",
+        # v2: smart mode, per-app profiles, translation only
+        "mode": "auto",
+        "translation_only": False,
+        "profiles_enabled": True,
+        "profile_activation": "running",
+        "profiles": profiles_mod.builtin_profiles(),
+        # v2: Live mode (captions for what the speakers play)
+        "live_enabled": True,
+        "live_when_no_lyrics": True,
+        "live_model": "small",
+        "live_english_only": False,
+        "live_source_language": "auto",
+        "live_device": "auto",
+        "live_vad_sensitivity": 5,
+        "live_max_segment": 6.0,
+        "live_reading_cps": 17.0,
+        "live_min_display": 1.5,
+        "live_context_lines": 4,
+        "live_save_transcripts": False,
+        "hotkey_live_pause": "ctrl+alt+p",
+        # v2: templates, overlay window, monitors, settings window
+        "template": "cinema",
+        "ui_theme": "dark",
+        "overlay_scale": 1.0,
+        "overlay_opacity": 1.0,
+        "monitors_off": [],
+        "follow_active_monitor": False,
+        "virtual_desktops": "all",
+        "hotkey_click_through": "ctrl+alt+k",
+        "preview_backdrop": "dark",
+        "preview_collapsed": False,
+        "settings_section": "general",
     }
 
 
@@ -149,19 +191,28 @@ def _str_list(v: Any, d: list[str], max_items: int = 50, lower: bool = False) ->
 
 
 def _positions(v: Any) -> dict[str, dict[str, Any]]:
+    """Saved overlay places, keyed by monitor name or ``<profile id>@<monitor>``: position (x, y relative to
+    the monitor work area, anchored at the top or bottom edge) and/or size (box width ``w`` in px, text
+    ``scale``)."""
     out: dict[str, dict[str, Any]] = {}
     if not isinstance(v, dict):
         return out
-    for mon, pos in list(v.items())[:16]:
+    for mon, pos in list(v.items())[:64]:
         if not isinstance(mon, str) or not isinstance(pos, dict):
             continue
+        entry: dict[str, Any] = {}
         x, y = pos.get("x"), pos.get("y")
         if isinstance(x, int) and isinstance(y, int) and not isinstance(x, bool) and not isinstance(y, bool):
-            out[mon[:100]] = {
-                "x": max(-20000, min(20000, x)),
-                "y": max(-20000, min(20000, y)),
-                "anchor": "top" if pos.get("anchor") == "top" else "bottom",
-            }
+            entry.update(x=max(-20000, min(20000, x)), y=max(-20000, min(20000, y)),
+                         anchor="top" if pos.get("anchor") == "top" else "bottom")
+        w = pos.get("w")
+        if isinstance(w, int) and not isinstance(w, bool) and w > 0:
+            entry["w"] = max(120, min(8000, w))
+        sc = pos.get("scale")
+        if isinstance(sc, (int, float)) and not isinstance(sc, bool) and sc == sc and sc > 0:
+            entry["scale"] = round(max(0.5, min(2.0, float(sc))), 3)
+        if entry:
+            out[mon[:150]] = entry
     return out
 
 
@@ -191,7 +242,9 @@ def validate(raw: Any) -> dict[str, Any]:
 
     s["provider"] = _choice(r.get("provider"), d["provider"], PROVIDERS)
     s["gemini_keys"] = _str_list(r.get("gemini_keys"), [], max_items=20)
-    s["gemini_models"] = _str_list(r.get("gemini_models"), d["gemini_models"], max_items=20) or list(DEFAULT_MODELS)
+    # model names go into the request URL path: only plain ids such as "gemini-2.5-flash"
+    s["gemini_models"] = [m for m in _str_list(r.get("gemini_models"), d["gemini_models"], max_items=20)
+                          if _MODEL.match(m)] or list(DEFAULT_MODELS)
     s["fallback_free"] = _bool(r.get("fallback_free"), d["fallback_free"])
     s["style"] = _str(r.get("style"), d["style"]).strip() or d["style"]
     s["skip_same_language"] = _bool(r.get("skip_same_language"), d["skip_same_language"])
@@ -218,7 +271,7 @@ def validate(raw: Any) -> dict[str, Any]:
     s["offset_ms"] = _num(r.get("offset_ms"), d["offset_ms"], -15000, 15000, True)
     s["offset_step_ms"] = _num(r.get("offset_step_ms"), d["offset_step_ms"], 50, 2000, True)
     s["hotkeys_enabled"] = _bool(r.get("hotkeys_enabled"), d["hotkeys_enabled"])
-    for k in ("hotkey_offset_up", "hotkey_offset_down", "hotkey_toggle"):
+    for k in ("hotkey_offset_up", "hotkey_offset_down", "hotkey_toggle", "hotkey_live_pause", "hotkey_click_through"):
         s[k] = _hotkey(r.get(k), d[k])
 
     s["proxy_mode"] = _choice(r.get("proxy_mode"), d["proxy_mode"], PROXY_MODES)
@@ -226,6 +279,36 @@ def validate(raw: Any) -> dict[str, Any]:
     s["proxy_url"] = url if url == "" or _PROXY.match(url) else ""
     if s["proxy_mode"] == "custom" and not s["proxy_url"]:
         s["proxy_mode"] = "system"
+
+    s["mode"] = _choice(r.get("mode"), d["mode"], MODES)
+    s["translation_only"] = _bool(r.get("translation_only"), d["translation_only"])
+    s["profiles_enabled"] = _bool(r.get("profiles_enabled"), d["profiles_enabled"])
+    s["profile_activation"] = _choice(r.get("profile_activation"), d["profile_activation"],
+                                      profiles_mod.GLOBAL_ACTIVATIONS)
+    s["profiles"] = profiles_mod.validate_profiles(r.get("profiles"), lang_codes)
+    for k in ("live_enabled", "live_when_no_lyrics", "live_english_only", "live_save_transcripts"):
+        s[k] = _bool(r.get(k), d[k])
+    s["live_model"] = _choice(r.get("live_model"), d["live_model"], LIVE_SIZES)
+    s["live_source_language"] = _choice(r.get("live_source_language"), d["live_source_language"],
+                                        ["auto"] + lang_codes)
+    s["live_device"] = _choice(r.get("live_device"), d["live_device"], LIVE_DEVICES)
+    s["live_vad_sensitivity"] = _num(r.get("live_vad_sensitivity"), d["live_vad_sensitivity"], 1, 10, True)
+    s["live_max_segment"] = _num(r.get("live_max_segment"), d["live_max_segment"], 2, 15)
+    s["live_reading_cps"] = _num(r.get("live_reading_cps"), d["live_reading_cps"], 8, 30)
+    s["live_min_display"] = _num(r.get("live_min_display"), d["live_min_display"], 0.5, 6)
+    s["live_context_lines"] = _num(r.get("live_context_lines"), d["live_context_lines"], 0, 12, True)
+
+    tpl = r.get("template")
+    s["template"] = tpl if isinstance(tpl, str) and _TEMPLATE_ID.match(tpl) else d["template"]
+    s["ui_theme"] = _choice(r.get("ui_theme"), d["ui_theme"], UI_THEMES)
+    s["overlay_scale"] = round(_num(r.get("overlay_scale"), d["overlay_scale"], 0.5, 2.0), 3)
+    s["overlay_opacity"] = round(_num(r.get("overlay_opacity"), d["overlay_opacity"], 0.2, 1.0), 3)
+    s["monitors_off"] = _str_list(r.get("monitors_off"), [], max_items=16)
+    s["follow_active_monitor"] = _bool(r.get("follow_active_monitor"), d["follow_active_monitor"])
+    s["virtual_desktops"] = _choice(r.get("virtual_desktops"), d["virtual_desktops"], DESKTOP_MODES)
+    s["preview_backdrop"] = _choice(r.get("preview_backdrop"), d["preview_backdrop"], BACKDROPS)
+    s["preview_collapsed"] = _bool(r.get("preview_collapsed"), d["preview_collapsed"])
+    s["settings_section"] = _choice(r.get("settings_section"), d["settings_section"], SECTIONS)
     return s
 
 
@@ -264,7 +347,8 @@ def protect_keys(keys: list[str]) -> str:
     raw = json.dumps(keys).encode("utf-8")
     try:
         return "dpapi:" + base64.b64encode(_dpapi(raw, True)).decode("ascii")
-    except Exception:  # non-Windows or DPAPI unavailable
+    except Exception as e:  # non-Windows or DPAPI unavailable
+        log.warning("DPAPI unavailable (%s): API keys are stored only base64-encoded", type(e).__name__)
         return "b64:" + base64.b64encode(raw).decode("ascii")
 
 
@@ -296,6 +380,9 @@ class Settings:
         self._save_lock = threading.Lock()
         self._listeners: list[Listener] = []
         self.first_run = not self.path.exists()
+        self.loaded_keys: set[str] = set()     # keys present in settings.json at start (v1 -> v2 migration)
+        self.rev = 0                           # grows on every change (lets readers cache merged views)
+        self._kept_keys_blob = ""              # encrypted keys this Windows user cannot decrypt: never dropped
         self._data = self._load()
         if self.first_run:
             self.save()
@@ -305,7 +392,8 @@ class Settings:
         raw: dict[str, Any] = {}
         if self.path.exists():
             try:
-                raw = json.loads(self.path.read_text(encoding="utf-8"))
+                # utf-8-sig: a file saved by Notepad or PowerShell 5 starts with a BOM; it is still valid
+                raw = json.loads(self.path.read_text(encoding="utf-8-sig"))
             except Exception as e:
                 log.error("settings.json is unreadable (%s); using defaults", e)
                 try:
@@ -313,16 +401,24 @@ class Settings:
                 except OSError:
                     pass
                 raw = {}
+        if isinstance(raw, dict):
+            self.loaded_keys = set(raw)
         if isinstance(raw, dict) and "gemini_keys_protected" in raw:
-            raw["gemini_keys"] = unprotect_keys(raw.pop("gemini_keys_protected"))
+            blob = raw.pop("gemini_keys_protected")
+            raw["gemini_keys"] = unprotect_keys(blob)
+            if not raw["gemini_keys"] and isinstance(blob, str) and blob:
+                # e.g. settings copied from another PC or Windows user: keep the blob instead of erasing the
+                # keys on the next save; entering new keys replaces it
+                self._kept_keys_blob = blob
         return validate(raw)
 
     def save(self) -> None:
         with self._save_lock:  # serialise writers so an older snapshot never replaces a newer one
             with self._lock:
                 data = copy.deepcopy(self._data)
+                kept = self._kept_keys_blob
             keys = data.pop("gemini_keys", [])
-            data["gemini_keys_protected"] = protect_keys(keys) if keys else ""
+            data["gemini_keys_protected"] = protect_keys(keys) if keys else kept
             tmp = self.path.with_suffix(".tmp")
             try:
                 tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -354,6 +450,10 @@ class Settings:
             new = validate(merged)
             changed = {k for k in new if new[k] != self._data.get(k)}
             self._data = new
+            if changed:
+                self.rev += 1
+            if "gemini_keys" in changed:
+                self._kept_keys_blob = ""   # the user set the keys: the old undecryptable ones are replaced
         if changed:
             self.save()
             for fn in list(self._listeners):

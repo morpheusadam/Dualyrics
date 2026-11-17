@@ -4,14 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dualyrics"
-version = "1.0.0"
-description = "Synced song lyrics with a live translation under every line, as a floating overlay for Windows (Spotify, YouTube Music, Spotube and any media-controls player)."
+version = "2.0.0"
+description = "Synced song lyrics and live captions with a translation under every line, as a floating overlay for Windows (Spotify, YouTube Music, Spotube, games and films)."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
 authors = [{ name = "Dualyrics contributors" }]
 keywords = ["lyrics", "synced lyrics", "lyrics translation", "translate lyrics", "spotify lyrics",
-            "youtube music lyrics", "lrclib", "gemini", "overlay", "windows", "karaoke", "language learning"]
+            "youtube music lyrics", "lrclib", "gemini", "overlay", "windows", "karaoke", "language learning",
+            "live captions", "game subtitles", "translate game dialogue", "whisper"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Environment :: Win32 (MS Windows)",
@@ -37,15 +38,20 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=7"]
+# Live mode (captions for what the speakers play); the app can also install these itself
+live = ["numpy>=1.24", "faster-whisper>=1.0", "PyAudioWPatch>=0.2.12"]
+live-gpu = ["numpy>=1.24", "faster-whisper>=1.0", "PyAudioWPatch>=0.2.12", "nvidia-cublas-cu12",
+            "nvidia-cudnn-cu12>=9,<10"]
 
 [project.gui-scripts]
 dualyrics = "dualyrics.app:main"
 
 [tool.setuptools]
-packages = ["dualyrics"]
+packages = ["dualyrics", "dualyrics.live", "dualyrics.templates", "dualyrics.ui"]
 
 [tool.setuptools.package-data]
-dualyrics = ["assets/*"]
+dualyrics = ["assets/*", "assets/fonts/*", "assets/theme/*"]
+"dualyrics.templates" = ["schema.json", "builtin/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

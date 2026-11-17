@@ -1,0 +1,213 @@
+{
+  "schema": "dualyrics.template/1",
+  "id": "game_hud",
+  "name": {
+    "en": "Game HUD",
+    "fa": "حالت بازی"
+  },
+  "description": {
+    "en": "Built for gaming: compact high-contrast panel at the top, away from the game's own subtitles; click-through and locked so it never steals the mouse.",
+    "fa": "مخصوص بازی: پنل جمع‌وجور و پرکنتراست بالای صفحه، دور از زیرنویس خود بازی؛ کلیک از رویش رد می‌شود و قفل است."
+  },
+  "builtin": true,
+  "based_on": null,
+  "scale": {
+    "mode": "screen",
+    "reference_height": 1080
+  },
+  "layout": {
+    "translation_position": "below",
+    "mirror_for_rtl": true
+  },
+  "container": {
+    "background": {
+      "color": "#000000",
+      "opacity": 0.7,
+      "gradient": null
+    },
+    "blur": {
+      "mode": "none",
+      "strength": 0,
+      "noise": 0,
+      "sheen": 0
+    },
+    "padding": {
+      "x": 16,
+      "y": 8
+    },
+    "corner_radius": 8,
+    "border": {
+      "width": 1,
+      "color": "#FFFFFF",
+      "opacity": 0.14
+    },
+    "shadow": null,
+    "width": {
+      "unit": "percent",
+      "value": 55,
+      "fit_content": true,
+      "min_px": 0
+    },
+    "align": "center",
+    "line_gap": 2,
+    "group_gap": 6
+  },
+  "lines": {
+    "original": {
+      "visible": true,
+      "font": {
+        "latin": [
+          "Bahnschrift SemiBold",
+          "Bahnschrift",
+          "Segoe UI",
+          "Arial"
+        ],
+        "rtl": [
+          "Vazirmatn",
+          "Segoe UI",
+          "Tahoma"
+        ],
+        "size": 26,
+        "weight": 600,
+        "italic": false
+      },
+      "color": "#FFFFFF",
+      "gradient": null,
+      "opacity": 1.0,
+      "outline": {
+        "width": 2,
+        "color": "#000000",
+        "opacity": 1.0
+      },
+      "shadow": [],
+      "letter_spacing": 0,
+      "line_height": 1.15,
+      "max_lines": 2,
+      "uppercase": false
+    },
+    "translation": {
+      "visible": true,
+      "font": {
+        "latin": [
+          "Bahnschrift SemiBold",
+          "Bahnschrift",
+          "Segoe UI",
+          "Arial"
+        ],
+        "rtl": [
+          "Vazirmatn",
+          "Segoe UI",
+          "Tahoma"
+        ],
+        "size": 26,
+        "weight": 700,
+        "italic": false
+      },
+      "color": "#67E8F9",
+      "gradient": null,
+      "opacity": 1.0,
+      "outline": {
+        "width": 2,
+        "color": "#000000",
+        "opacity": 1.0
+      },
+      "shadow": [],
+      "letter_spacing": 0,
+      "line_height": 1.2,
+      "max_lines": 2,
+      "uppercase": false
+    },
+    "next": {
+      "visible": false,
+      "font": {
+        "latin": [
+          "Bahnschrift SemiBold",
+          "Bahnschrift",
+          "Segoe UI",
+          "Arial"
+        ],
+        "rtl": [
+          "Vazirmatn",
+          "Segoe UI",
+          "Tahoma"
+        ],
+        "size": 18,
+        "weight": 400,
+        "italic": false
+      },
+      "color": "#CBD5E1",
+      "gradient": null,
+      "opacity": 1.0,
+      "outline": {
+        "width": 0,
+        "color": "#000000",
+        "opacity": 1.0
+      },
+      "shadow": [],
+      "letter_spacing": 0,
+      "line_height": 1.2,
+      "max_lines": 1,
+      "uppercase": false
+    },
+    "speaker": {
+      "visible": false,
+      "font": {
+        "latin": [
+          "Bahnschrift SemiBold",
+          "Bahnschrift",
+          "Segoe UI",
+          "Arial"
+        ],
+        "rtl": [
+          "Vazirmatn",
+          "Segoe UI",
+          "Tahoma"
+        ],
+        "size": 18,
+        "weight": 700,
+        "italic": false
+      },
+      "color": "#FDE047",
+      "gradient": null,
+      "opacity": 1.0,
+      "outline": {
+        "width": 0,
+        "color": "#000000",
+        "opacity": 1.0
+      },
+      "shadow": [],
+      "letter_spacing": 0,
+      "line_height": 1.2,
+      "max_lines": 1,
+      "uppercase": true,
+      "format": "{name}:",
+      "placement": "inline"
+    }
+  },
+  "karaoke": {
+    "enabled": false,
+    "mode": "line",
+    "applies_to": "original",
+    "highlight_color": "#67E8F9",
+    "highlight_gradient": null,
+    "inactive_opacity": 0.6,
+    "glow": null
+  },
+  "animation": {
+    "enter": "fade",
+    "exit": "fade",
+    "duration_ms": 120,
+    "exit_duration_ms": 100,
+    "slide_px": 0,
+    "easing": "ease_out",
+    "reduced_motion": "respect"
+  },
+  "timing": {
+    "min_display_ms": 1500
+  },
+  "hints": {
+    "placement": "top",
+    "click_through": true,
+    "locked": true
+  }
+}

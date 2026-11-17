@@ -165,7 +165,7 @@ class Gemini:
         text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip())
         return json.loads(text), 200, ""
 
-    def ask(self, keys: list[str], models: list[str], prompt: str) -> Any:
+    def ask(self, keys: list[str], models: list[str], prompt: str, timeout: Any = net.TIMEOUT_SLOW) -> Any:
         """Try every model x key (skipping ones cooling down after errors). Raises TranslationError."""
         if not keys:
             raise TranslationError("no Gemini API key")
@@ -175,7 +175,7 @@ class Gemini:
                 if self._cooling(model, key):
                     continue
                 try:
-                    data, status, msg = self.call_once(model, key, prompt)
+                    data, status, msg = self.call_once(model, key, prompt, timeout=timeout)
                 except json.JSONDecodeError as e:
                     self._cooldown(model, key, 20)
                     last = f"{model}: bad JSON ({e})"

@@ -5,6 +5,7 @@ from __future__ import annotations
 import ctypes
 import logging
 import sys
+import time
 from ctypes import wintypes
 from dataclasses import dataclass
 
@@ -34,6 +35,8 @@ if IS_WINDOWS:
     kernel32.CreateEventW.restype = wintypes.HANDLE
     kernel32.OpenEventW.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.LPCWSTR]
     kernel32.OpenEventW.restype = wintypes.HANDLE
+    kernel32.OpenMutexW.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.LPCWSTR]
+    kernel32.OpenMutexW.restype = wintypes.HANDLE
     kernel32.SetEvent.argtypes = [wintypes.HANDLE]
     kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
     kernel32.WaitForSingleObject.restype = wintypes.DWORD
@@ -69,6 +72,17 @@ class Monitor:
     right: int
     bottom: int          # work area (excludes the taskbar)
     primary: bool
+    screen: tuple[int, int, int, int] = (0, 0, 0, 0)   # full monitor rectangle (left, top, right, bottom)
+    dpi: int = 96
+
+    @property
+    def screen_height(self) -> int:
+        h = self.screen[3] - self.screen[1]
+        return h if h > 0 else self.height
+
+    @property
+    def scale(self) -> float:
+        return self.dpi / 96.0
 
     @property
     def width(self) -> int:
@@ -92,8 +106,16 @@ def _info(hmon: int) -> Monitor | None:
     mi.cbSize = ctypes.sizeof(mi)
     if not user32.GetMonitorInfoW(wintypes.HMONITOR(hmon), ctypes.byref(mi)):
         return None
-    w = mi.rcWork
-    return Monitor(mi.szDevice, w.left, w.top, w.right, w.bottom, bool(mi.dwFlags & 1))
+    w, r = mi.rcWork, mi.rcMonitor
+    dpi = 96
+    try:
+        dx, dy = wintypes.UINT(), wintypes.UINT()
+        if ctypes.windll.shcore.GetDpiForMonitor(wintypes.HMONITOR(hmon), 0, ctypes.byref(dx), ctypes.byref(dy)) == 0:
+            dpi = int(dx.value) or 96
+    except Exception:
+        pass
+    return Monitor(mi.szDevice, w.left, w.top, w.right, w.bottom, bool(mi.dwFlags & 1),
+                   (r.left, r.top, r.right, r.bottom), dpi)
 
 
 def monitors() -> list[Monitor]:
@@ -123,6 +145,19 @@ def monitor_at(x: int, y: int) -> Monitor:
             return m
     mons = monitors()
     return next((m for m in mons if m.contains(x, y)), next((m for m in mons if m.primary), mons[0]))
+
+
+def monitor_of_window(hwnd: int) -> Monitor | None:
+    """Monitor that shows most of a window (None when unknown)."""
+    if not IS_WINDOWS or not hwnd:
+        return None
+    try:
+        user32.MonitorFromWindow.argtypes = [wintypes.HWND, wintypes.DWORD]
+        user32.MonitorFromWindow.restype = wintypes.HMONITOR
+        hmon = user32.MonitorFromWindow(hwnd, 2)
+        return _info(hmon) if hmon else None
+    except Exception:
+        return None
 
 
 def primary_monitor() -> Monitor:
@@ -194,10 +229,12 @@ class SingleInstance:
 
     MUTEX = "Local\\Dualyrics.SingleInstance.Mutex"
     EVENT = "Local\\Dualyrics.SingleInstance.Show"
+    QUIT_EVENT = "Local\\Dualyrics.SingleInstance.Quit"   # set by `Dualyrics.exe --quit` (the installer)
 
     def __init__(self) -> None:
         self.mutex = None
         self.event = None
+        self.quit_event = None
         self.already_running = False
         if not IS_WINDOWS:
             return
@@ -205,6 +242,36 @@ class SingleInstance:
         self.already_running = ctypes.get_last_error() == 183  # ERROR_ALREADY_EXISTS
         if not self.already_running:
             self.event = kernel32.CreateEventW(None, False, False, self.EVENT)
+            self.quit_event = kernel32.CreateEventW(None, True, False, self.QUIT_EVENT)
+
+    def signal_quit(self) -> bool:
+        """Ask the running copy to quit (saves settings). False when no copy that understands it is running."""
+        if not IS_WINDOWS:
+            return False
+        h = kernel32.OpenEventW(0x0002, False, self.QUIT_EVENT)
+        if not h:
+            return False
+        kernel32.SetEvent(h)
+        kernel32.CloseHandle(h)
+        return True
+
+    def quit_requested(self) -> bool:
+        return bool(self.quit_event) and kernel32.WaitForSingleObject(self.quit_event, 0) == 0
+
+    @classmethod
+    def wait_until_gone(cls, timeout_s: float) -> bool:
+        """Wait for the running copy to exit (its mutex disappears). Call after release()."""
+        if not IS_WINDOWS:
+            return True
+        end = time.monotonic() + timeout_s
+        while True:
+            h = kernel32.OpenMutexW(0x00100000, False, cls.MUTEX)  # SYNCHRONIZE
+            if not h:
+                return True
+            kernel32.CloseHandle(h)
+            if time.monotonic() >= end:
+                return False
+            time.sleep(0.2)
 
     def signal_running_instance(self) -> None:
         if not IS_WINDOWS:
@@ -223,11 +290,11 @@ class SingleInstance:
     def release(self) -> None:
         if not IS_WINDOWS:
             return
-        for h in (self.event,):
+        for h in (self.event, self.quit_event):
             if h:
                 kernel32.CloseHandle(h)
         if self.mutex:
             if not self.already_running:
                 kernel32.ReleaseMutex(self.mutex)
             kernel32.CloseHandle(self.mutex)
-        self.mutex = self.event = None
+        self.mutex = self.event = self.quit_event = None

@@ -1,0 +1,269 @@
+{
+  "schema": "dualyrics.template/1",
+  "id": "minimal",
+  "name": {
+    "en": "Minimal",
+    "fa": "مینیمال"
+  },
+  "description": {
+    "en": "Just the words with a soft shadow. No box, no outline, nothing else on screen.",
+    "fa": "فقط کلمه‌ها با یک سایه‌ی نرم؛ بدون کادر و بدون دورخط."
+  },
+  "builtin": true,
+  "based_on": null,
+  "scale": {
+    "mode": "screen",
+    "reference_height": 1080
+  },
+  "layout": {
+    "translation_position": "below",
+    "mirror_for_rtl": true
+  },
+  "container": {
+    "background": {
+      "color": "#000000",
+      "opacity": 0.0,
+      "gradient": null
+    },
+    "blur": {
+      "mode": "none",
+      "strength": 0,
+      "noise": 0,
+      "sheen": 0
+    },
+    "padding": {
+      "x": 16,
+      "y": 8
+    },
+    "corner_radius": 0,
+    "border": {
+      "width": 0,
+      "color": "#FFFFFF",
+      "opacity": 0
+    },
+    "shadow": null,
+    "width": {
+      "unit": "percent",
+      "value": 75,
+      "fit_content": false,
+      "min_px": 0
+    },
+    "align": "center",
+    "line_gap": 6,
+    "group_gap": 8
+  },
+  "lines": {
+    "original": {
+      "visible": true,
+      "font": {
+        "latin": [
+          "Segoe UI Variable Text",
+          "Segoe UI",
+          "Arial"
+        ],
+        "rtl": [
+          "Vazirmatn",
+          "Segoe UI",
+          "Tahoma"
+        ],
+        "size": 30,
+        "weight": 500,
+        "italic": false
+      },
+      "color": "#FFFFFF",
+      "gradient": null,
+      "opacity": 1.0,
+      "outline": {
+        "width": 0,
+        "color": "#000000",
+        "opacity": 1.0
+      },
+      "shadow": [
+        {
+          "x": 0,
+          "y": 1,
+          "blur": 3,
+          "color": "#000000",
+          "opacity": 0.9
+        },
+        {
+          "x": 0,
+          "y": 0,
+          "blur": 12,
+          "color": "#000000",
+          "opacity": 0.6
+        }
+      ],
+      "letter_spacing": 0,
+      "line_height": 1.2,
+      "max_lines": 2,
+      "uppercase": false
+    },
+    "translation": {
+      "visible": true,
+      "font": {
+        "latin": [
+          "Segoe UI Variable Text",
+          "Segoe UI",
+          "Arial"
+        ],
+        "rtl": [
+          "Vazirmatn",
+          "Segoe UI",
+          "Tahoma"
+        ],
+        "size": 28,
+        "weight": 400,
+        "italic": false
+      },
+      "color": "#FDE68A",
+      "gradient": null,
+      "opacity": 1.0,
+      "outline": {
+        "width": 0,
+        "color": "#000000",
+        "opacity": 1.0
+      },
+      "shadow": [
+        {
+          "x": 0,
+          "y": 1,
+          "blur": 3,
+          "color": "#000000",
+          "opacity": 0.9
+        },
+        {
+          "x": 0,
+          "y": 0,
+          "blur": 12,
+          "color": "#000000",
+          "opacity": 0.6
+        }
+      ],
+      "letter_spacing": 0,
+      "line_height": 1.25,
+      "max_lines": 2,
+      "uppercase": false
+    },
+    "next": {
+      "visible": false,
+      "font": {
+        "latin": [
+          "Segoe UI Variable Text",
+          "Segoe UI",
+          "Arial"
+        ],
+        "rtl": [
+          "Vazirmatn",
+          "Segoe UI",
+          "Tahoma"
+        ],
+        "size": 20,
+        "weight": 400,
+        "italic": false
+      },
+      "color": "#E5E5E5",
+      "gradient": null,
+      "opacity": 1.0,
+      "outline": {
+        "width": 0,
+        "color": "#000000",
+        "opacity": 1.0
+      },
+      "shadow": [
+        {
+          "x": 0,
+          "y": 1,
+          "blur": 3,
+          "color": "#000000",
+          "opacity": 0.9
+        },
+        {
+          "x": 0,
+          "y": 0,
+          "blur": 12,
+          "color": "#000000",
+          "opacity": 0.6
+        }
+      ],
+      "letter_spacing": 0,
+      "line_height": 1.2,
+      "max_lines": 1,
+      "uppercase": false
+    },
+    "speaker": {
+      "visible": false,
+      "font": {
+        "latin": [
+          "Segoe UI Variable Text",
+          "Segoe UI",
+          "Arial"
+        ],
+        "rtl": [
+          "Vazirmatn",
+          "Segoe UI",
+          "Tahoma"
+        ],
+        "size": 20,
+        "weight": 600,
+        "italic": false
+      },
+      "color": "#E5E5E5",
+      "gradient": null,
+      "opacity": 1.0,
+      "outline": {
+        "width": 0,
+        "color": "#000000",
+        "opacity": 1.0
+      },
+      "shadow": [
+        {
+          "x": 0,
+          "y": 1,
+          "blur": 3,
+          "color": "#000000",
+          "opacity": 0.9
+        },
+        {
+          "x": 0,
+          "y": 0,
+          "blur": 12,
+          "color": "#000000",
+          "opacity": 0.6
+        }
+      ],
+      "letter_spacing": 0,
+      "line_height": 1.2,
+      "max_lines": 1,
+      "uppercase": false,
+      "format": "{name}:",
+      "placement": "inline"
+    }
+  },
+  "karaoke": {
+    "enabled": false,
+    "mode": "line",
+    "applies_to": "original",
+    "highlight_color": "#FDE68A",
+    "highlight_gradient": null,
+    "inactive_opacity": 0.6,
+    "glow": null
+  },
+  "animation": {
+    "enter": "fade",
+    "exit": "fade",
+    "duration_ms": 200,
+    "exit_duration_ms": 140,
+    "slide_px": 0,
+    "easing": "ease_out",
+    "reduced_motion": "respect"
+  },
+  "timing": {
+    "min_display_ms": 1000
+  },
+  "hints": {
+    "placement": "keep",
+    "click_through": null,
+    "locked": null
+  }
+}

@@ -1,0 +1,237 @@
+{
+  "schema": "dualyrics.template/1",
+  "id": "karaoke",
+  "name": {
+    "en": "Karaoke",
+    "fa": "کارائوکه"
+  },
+  "description": {
+    "en": "Sing along: a cyan fill sweeps across the line being sung, the next line waits dimmed below.",
+    "fa": "هم‌خوانی: رنگ فیروزه‌ای روی خطی که خوانده می‌شود جلو می‌رود و خط بعدی کم‌رنگ پایینش منتظر است."
+  },
+  "builtin": true,
+  "based_on": null,
+  "scale": {
+    "mode": "screen",
+    "reference_height": 1080
+  },
+  "layout": {
+    "translation_position": "below",
+    "mirror_for_rtl": true
+  },
+  "container": {
+    "background": {
+      "color": "#0B1120",
+      "opacity": 0.82,
+      "gradient": null
+    },
+    "blur": {
+      "mode": "none",
+      "strength": 0,
+      "noise": 0,
+      "sheen": 0
+    },
+    "padding": {
+      "x": 24,
+      "y": 14
+    },
+    "corner_radius": 16,
+    "border": {
+      "width": 1,
+      "color": "#22D3EE",
+      "opacity": 0.25
+    },
+    "shadow": {
+      "x": 0,
+      "y": 8,
+      "blur": 24,
+      "color": "#000000",
+      "opacity": 0.45
+    },
+    "width": {
+      "unit": "percent",
+      "value": 60,
+      "fit_content": false,
+      "min_px": 0
+    },
+    "align": "center",
+    "line_gap": 6,
+    "group_gap": 12
+  },
+  "lines": {
+    "original": {
+      "visible": true,
+      "font": {
+        "latin": [
+          "Segoe UI Variable Display",
+          "Segoe UI",
+          "Arial"
+        ],
+        "rtl": [
+          "Vazirmatn",
+          "Segoe UI",
+          "Tahoma"
+        ],
+        "size": 34,
+        "weight": 700,
+        "italic": false
+      },
+      "color": "#F1F5F9",
+      "gradient": null,
+      "opacity": 1.0,
+      "outline": {
+        "width": 0,
+        "color": "#000000",
+        "opacity": 1.0
+      },
+      "shadow": [
+        {
+          "x": 0,
+          "y": 2,
+          "blur": 4,
+          "color": "#000000",
+          "opacity": 0.5
+        }
+      ],
+      "letter_spacing": 0,
+      "line_height": 1.15,
+      "max_lines": 2,
+      "uppercase": false
+    },
+    "translation": {
+      "visible": true,
+      "font": {
+        "latin": [
+          "Segoe UI Variable Display",
+          "Segoe UI",
+          "Arial"
+        ],
+        "rtl": [
+          "Vazirmatn",
+          "Segoe UI",
+          "Tahoma"
+        ],
+        "size": 24,
+        "weight": 500,
+        "italic": false
+      },
+      "color": "#FDA4AF",
+      "gradient": null,
+      "opacity": 1.0,
+      "outline": {
+        "width": 0,
+        "color": "#000000",
+        "opacity": 1.0
+      },
+      "shadow": [
+        {
+          "x": 0,
+          "y": 1,
+          "blur": 3,
+          "color": "#000000",
+          "opacity": 0.5
+        }
+      ],
+      "letter_spacing": 0,
+      "line_height": 1.25,
+      "max_lines": 2,
+      "uppercase": false
+    },
+    "next": {
+      "visible": true,
+      "font": {
+        "latin": [
+          "Segoe UI Variable Display",
+          "Segoe UI",
+          "Arial"
+        ],
+        "rtl": [
+          "Vazirmatn",
+          "Segoe UI",
+          "Tahoma"
+        ],
+        "size": 22,
+        "weight": 500,
+        "italic": false
+      },
+      "color": "#B4C0D0",
+      "gradient": null,
+      "opacity": 1.0,
+      "outline": {
+        "width": 0,
+        "color": "#000000",
+        "opacity": 1.0
+      },
+      "shadow": [],
+      "letter_spacing": 0,
+      "line_height": 1.2,
+      "max_lines": 1,
+      "uppercase": false
+    },
+    "speaker": {
+      "visible": true,
+      "font": {
+        "latin": [
+          "Segoe UI Variable Display",
+          "Segoe UI",
+          "Arial"
+        ],
+        "rtl": [
+          "Vazirmatn",
+          "Segoe UI",
+          "Tahoma"
+        ],
+        "size": 18,
+        "weight": 700,
+        "italic": false
+      },
+      "color": "#22D3EE",
+      "gradient": null,
+      "opacity": 1.0,
+      "outline": {
+        "width": 0,
+        "color": "#000000",
+        "opacity": 1.0
+      },
+      "shadow": [],
+      "letter_spacing": 1,
+      "line_height": 1.2,
+      "max_lines": 1,
+      "uppercase": true,
+      "format": "{name}:",
+      "placement": "above"
+    }
+  },
+  "karaoke": {
+    "enabled": true,
+    "mode": "sweep",
+    "applies_to": "original",
+    "highlight_color": "#22D3EE",
+    "highlight_gradient": null,
+    "inactive_opacity": 0.5,
+    "glow": {
+      "x": 0,
+      "y": 0,
+      "blur": 12,
+      "color": "#22D3EE",
+      "opacity": 0.55
+    }
+  },
+  "animation": {
+    "enter": "fade_slide_up",
+    "exit": "fade",
+    "duration_ms": 220,
+    "exit_duration_ms": 140,
+    "slide_px": 12,
+    "easing": "ease_out",
+    "reduced_motion": "respect"
+  },
+  "timing": {
+    "min_display_ms": 800
+  },
+  "hints": {
+    "placement": "keep",
+    "click_through": null,
+    "locked": null
+  }
+}
