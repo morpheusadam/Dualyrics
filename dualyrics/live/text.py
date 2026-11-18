@@ -9,6 +9,7 @@ import re
 import unicodedata
 from collections import deque
 from dataclasses import dataclass, field
+from typing import Any
 
 # Whisper "hears" these in silence, music or applause (they come from subtitle credits in its training data)
 JUNK = {
@@ -41,6 +42,8 @@ MIN_AVG_LOGPROB = -1.0      # below this the words are guesses...
 MAX_NO_SPEECH = 0.6         # ...and when Whisper also thinks there is no speech, drop it
 VERY_LOW_LOGPROB = -1.6     # drop regardless of no_speech_prob
 MAX_COMPRESSION = 2.4       # gzip ratio above this = repetition loop ("the the the the")
+NOISE_SECONDS, NOISE_ALNUM = 2.0, 3   # a piece this long with this few letters is noise (LiveTranslate's idea)
+_CJK_TEXT = re.compile("[぀-ヿ㐀-䶿一-鿿가-힯]")   # few signs, many words
 
 
 @dataclass
@@ -55,6 +58,7 @@ class Recognition:
     language: str = ""           # spoken language (detected or set)
     pivot: bool = False          # ``text`` is the English pivot of speech in ``language`` (Whisper translate)
     alt: str = ""                # the original-language line, when it was written down too
+    captions: bool = False       # from Windows Live Captions (its own filtering; no Whisper noise rules)
 
 
 @dataclass
@@ -72,6 +76,7 @@ class Caption:
     written: bool = False
     pivot: bool = False          # ``text`` is English (pivot); ``alt`` holds the original-language line
     alt: str = ""
+    retry: Any = None            # dualyrics.retry.Backoff after a failed translation (asked again while shown)
 
 
 def normalize(text: str) -> str:
@@ -123,6 +128,9 @@ def hallucination_reason(r: Recognition) -> str | None:
         return "low_confidence"
     if r.compression_ratio > MAX_COMPRESSION or _repetitive(norm):
         return "repetition"
+    if (not r.captions and r.end - r.start >= NOISE_SECONDS and sum(ch.isalnum() for ch in norm) <= NOISE_ALNUM
+            and not _CJK_TEXT.search(norm)):
+        return "noise"                  # seconds of sound and "a" or "Oh": noise Whisper put words on
     return None
 
 
@@ -213,7 +221,10 @@ class CaptionStream:
             cap.text = text                # punctuation only: shown, not translated again
             cap.end = max(cap.end, r.end)
             return None
-        return self._replace(cap, text, r, r.end if now is None else now)
+        shown = cap.translation
+        cap = self._replace(cap, text, r, r.end if now is None else now)
+        cap.translation = shown            # the last translation stays until the new one comes (no "…" flicker)
+        return cap
 
     @staticmethod
     def _replace(cap: Caption, text: str, r: Recognition, now: float) -> Caption:

@@ -32,6 +32,7 @@ log = logging.getLogger(__name__)
 IS_WINDOWS = sys.platform == "win32"
 BIDI_CONTROLS = str.maketrans("", "", "‎‏‪‫‬‭‮⁦⁧⁨⁩")
 ELLIPSIS = "…"
+CLAUSE_MARKS = ".!?;:,،؛؟…—。！？，、"     # a tail-kept caption prefers to start after one of these
 GRIP = 7            # px around the box that still catch the mouse (resize edges)
 CACHE_LINES = 160
 
@@ -311,6 +312,7 @@ class Lines:
     next: str = ""
     speaker: str = ""
     status: str = ""
+    tail: bool = False          # Live / on-screen captions: a long line keeps its newest words
 
 
 @dataclass
@@ -436,7 +438,11 @@ class Renderer:
         italic = bool(style["font"]["italic"]) and not rtl
         return FontKey(face, max(4, int(round(style["font"]["size"] * s))), weight, italic)
 
-    def _wrap(self, text: str, key: FontKey, rtl: bool, max_w: int, max_lines: int, spacing: int) -> list[str]:
+    def _wrap(self, text: str, key: FontKey, rtl: bool, max_w: int, max_lines: int, spacing: int,
+              keep: str = "head") -> list[str]:
+        """Lines of ``text`` that fit ``max_w``. Too many lines: ``keep="head"`` (lyrics) keeps the start and
+        ends with an ellipsis; ``keep="tail"`` (Live and on-screen captions, which grow at the end) keeps the
+        newest words, starting with an ellipsis, preferably after a clause mark."""
         eng = engine()
         out: list[str] = []
         for para in text.split("\n"):
@@ -462,9 +468,11 @@ class Renderer:
                     line = word
             if line:
                 out.append(line)
+        if len(out) > max_lines and keep == "tail":
+            return self._tail(out, key, rtl, max_w, max_lines, spacing)
         if len(out) > max_lines:
-            keep = out[:max_lines]
-            last = keep[-1]
+            kept = out[:max_lines]
+            last = kept[-1]
             rest = " ".join(out[max_lines - 1:])
             # ellipsis at the logical end of the last kept line
             words = rest.split()
@@ -474,12 +482,30 @@ class Renderer:
                 if eng.width(key, cand + ELLIPSIS, rtl, spacing) > max_w:
                     break
                 fit = cand
-            keep[-1] = (fit or last) + ELLIPSIS
-            out = keep
+            kept[-1] = (fit or last) + ELLIPSIS
+            out = kept
         return out or [""]
 
+    @staticmethod
+    def _tail(out: list[str], key: FontKey, rtl: bool, max_w: int, max_lines: int, spacing: int) -> list[str]:
+        eng = engine()
+        kept = out[-max(1, max_lines):]
+        first = kept[0]
+        for i, ch in enumerate(first[:-1]):          # start at a clause when one begins early in the line
+            if ch in CLAUSE_MARKS and first[i + 1:i + 2] in (" ", "") or ch in "。！？，、":
+                rest = first[i + 1:].strip()
+                if rest and len(rest) >= len(first) // 2:
+                    first = rest
+                break
+        while first and eng.width(key, ELLIPSIS + first, rtl, spacing) > max_w:
+            words = first.split(" ", 1)
+            first = words[1] if len(words) > 1 else first[1:]
+        kept[0] = ELLIPSIS + first
+        return kept
+
     def block(self, style: dict[str, Any], text: str, s: float, max_w: int, align: str, mirror: bool,
-              kara: dict[str, Any] | None = None, block_w: int | None = None) -> tuple[Placed, int, int]:
+              kara: dict[str, Any] | None = None, block_w: int | None = None,
+              keep: str = "head") -> tuple[Placed, int, int]:
         """Render one text block. Returns (placed with x=y=0, logical width, logical height); the layer has
         ``pad`` px of room on every side for outline, shadow and glow."""
         text = text.translate(BIDI_CONTROLS).strip()
@@ -489,14 +515,14 @@ class Renderer:
         key = self.font_key(style, rtl, s)
         spacing = 0 if rtl else int(round(style["letter_spacing"] * s))
         ck = ("block", text, templates.style_hash(style), round(s, 3), max_w, align, mirror,
-              templates.style_hash(kara) if kara else "", block_w)
+              templates.style_hash(kara) if kara else "", block_w, keep)
         with self._lock:
             hit = self._cache.get(ck)
             if hit is not None:
                 self._cache.move_to_end(ck)
                 return hit
         eng = engine()
-        rows = self._wrap(text, key, rtl, max_w, int(style["max_lines"]), spacing)
+        rows = self._wrap(text, key, rtl, max_w, int(style["max_lines"]), spacing, keep)
         widths = [eng.width(key, r, rtl, spacing) for r in rows]
         height, _asc, lead = eng.metrics(key)
         adv = max(height + lead, int(round(style["font"]["size"] * s * style["line_height"])))
@@ -696,7 +722,9 @@ class Renderer:
                     gap = c["line_gap"] * s
                     placed, bw, bh = self.block(style, text, s, inner_max, align, mirror, kara)  # type: ignore[arg-type]
             else:
-                placed, bw, bh = self.block(style, text, s, inner_max, align, mirror, kara)  # type: ignore[arg-type]
+                keep = "tail" if lines.tail and kind in ("original", "translation") else "head"
+                placed, bw, bh = self.block(style, text, s, inner_max, align, mirror, kara,  # type: ignore[arg-type]
+                                            keep=keep)
             blocks.append((placed, bw, bh, gap, kind))
         content_w = max([b[1] for b in blocks] + [0])
         wcfg = c["width"]

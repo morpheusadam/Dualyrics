@@ -163,6 +163,25 @@ def candidates(title: str, artist: str) -> list[tuple[str, str]]:
     return out
 
 
+def _norm_title(t: str) -> str:
+    return " ".join(re.sub(r"[^\w\s]", " ", clean_title(t).lower()).split())
+
+
+def _norm_artist(a: str) -> str:
+    """Lower case, words sorted (``Beyoncé & Jay-Z`` and ``Jay-Z, Beyoncé`` compare equal)."""
+    return " ".join(sorted(re.sub(r"[^\w\s]", " ", (a or "").lower()).split()))
+
+
+def _sim(a: str, b: str) -> float:
+    if not a or not b:
+        return 0.0
+    if a == b:
+        return 1.0
+    from dualyrics.screen.dedupe import similarity
+
+    return similarity(a, b)
+
+
 # ---------------------------------------------------------------- LRCLIB client
 class LyricsClient:
     def __init__(self, session: requests.Session) -> None:
@@ -194,8 +213,16 @@ class LyricsClient:
         return res
 
     @staticmethod
-    def _score(j: dict[str, Any], duration: float) -> float:
+    def _score(j: dict[str, Any], duration: float, wanted: list[tuple[str, str]] | None = None) -> float:
+        """How good a search hit is: synced lyrics, a matching length and (``wanted``: the (title, artist)
+        pairs looked for) a similar title and artist, so a cover of the same length by someone else loses to
+        the original (the idea of BetterLyrics' scoring, written here)."""
         sc = 0.0
+        if wanted:
+            title = _norm_title(str(j.get("trackName") or j.get("name") or ""))
+            artist = _norm_artist(str(j.get("artistName") or ""))
+            sc += 3 * max((_sim(_norm_title(t), title) for t, _a in wanted), default=0.0)
+            sc += 3 * max((_sim(_norm_artist(a), artist) for _t, a in wanted if a), default=0.0)
         if j.get("syncedLyrics"):
             sc += 4
         elif j.get("plainLyrics"):
@@ -246,6 +273,7 @@ class LyricsClient:
 
         searches: list[dict[str, Any]] = [{"track_name": t, "artist_name": a} for t, a in candidates(title, artist)[:2]]
         searches.append({"q": f"{clean_artist(artist)} {clean_title(title)}"})
+        wanted = candidates(title, artist) or [(title, artist)]
         for params in searches:
             try:
                 arr = self._get("search", params) or []
@@ -259,11 +287,11 @@ class LyricsClient:
                 ok = [j for j in arr[:20] if isinstance(j, dict) and accept(j)]
                 if not ok:
                     continue
-                hit = consider(max(ok, key=lambda j: self._score(j, duration or 0)))
+                hit = consider(max(ok, key=lambda j: self._score(j, duration or 0, wanted)))
                 if hit:
                     return hit
                 continue
-            best = max(arr[:20], key=lambda j: self._score(j, duration or 0))
+            best = max(arr[:20], key=lambda j: self._score(j, duration or 0, wanted))
             if duration and best.get("duration") and abs(float(best["duration"]) - duration) > 25:
                 continue  # probably a different song
             hit = consider(best)

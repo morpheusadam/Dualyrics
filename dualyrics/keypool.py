@@ -3,6 +3,8 @@ r"""Gemini key pool: which key and model the next request uses, and what every k
 - Round robin: request n starts at enabled key n mod N for the first model (the models stay in the user's order:
   the best one first), so the load is spread over all keys instead of draining key 1 first. Keys and models
   that are resting are skipped.
+- Pacing: a pair that answered a per-minute 429 is from then on given at most its free-tier requests per minute
+  (``DEFAULT_RPM``, a 60 s window in memory), so bursts are spread over the keys instead of collecting 429s.
 - State of every model x key: ``ok``, ``rate_limited`` (a per-minute limit; until the server's ``retryDelay``),
   ``exhausted`` (the free-tier daily quota is used up; until the next reset at midnight US Pacific, stored as an
   absolute time so a restart does not ask again), ``cooling`` (a bad answer or a server error), and per key
@@ -26,6 +28,7 @@ import os
 import re
 import threading
 import time
+from collections import deque
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
@@ -35,6 +38,17 @@ OK, LIMITED, EXHAUSTED, COOLING, INVALID, OFF = "ok", "rate_limited", "exhausted
 SHARED_WINDOW = 5.0        # seconds: two 429s of different keys this close = evidence of one project
 SHARED_SCORE = 2           # points from which a pair is reported as sharing a project
 INVALID_FOR = 6 * 3600.0   # a rejected key is not asked again for this long (or until a Test passes)
+PACE_WINDOW = 60.0         # seconds of the requests-per-minute window
+# free-tier requests per minute (first match wins); used only for a pair that already hit a per-minute 429, so a
+# paid key (far higher limits) is never slowed down by these numbers
+DEFAULT_RPM: tuple[tuple[str, int], ...] = (
+    ("flash-lite", 15),
+    ("2.0-flash", 15),
+    ("gemma", 30),
+    ("pro", 5),
+    ("flash", 10),
+    ("", 10),
+)
 _RETRY_DELAY = re.compile(r'"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"')
 
 
@@ -51,6 +65,14 @@ def is_daily(msg: str, raw: str = "") -> bool:
 def retry_delay(raw: str) -> float | None:
     m = _RETRY_DELAY.search(raw or "")
     return max(5.0, min(3600.0, float(m.group(1)) + 1)) if m else None
+
+
+def rpm_for(model: str) -> int:
+    m = (model or "").lower()
+    for pattern, n in DEFAULT_RPM:
+        if pattern in m:
+            return n
+    return DEFAULT_RPM[-1][1]
 
 
 def is_bad_key(status: int, msg: str) -> bool:
@@ -77,6 +99,8 @@ class KeyPool:
         self._invalid: dict[str, tuple[float, str]] = {}                  # fp -> (until, why)
         self._pairs: dict[str, int] = {}                                  # "fpA|fpB" (sorted) -> score
         self._last429: dict[tuple[str, str], float] = {}
+        self._sent: dict[tuple[str, str], deque[float]] = {}            # (model, fp) -> request times (memory)
+        self._paced: set[tuple[str, str]] = set()                        # pairs that hit a per-minute 429
         self._turn = 0
         self.rev = 0
         self._load()
@@ -151,9 +175,21 @@ class KeyPool:
             if inv is not None and inv[0] > now:
                 return INVALID, inv[0], inv[1]
             st = self._slots.get((model, fp))
+            if (st is None or st[1] <= now) and (model, fp) in self._paced:
+                sent = self._sent.get((model, fp))
+                while sent and now - sent[0] >= PACE_WINDOW:
+                    sent.popleft()
+                if sent and len(sent) >= rpm_for(model):    # its minute is full: rest until a request leaves it
+                    return LIMITED, sent[0] + PACE_WINDOW, "requests per minute"
         if st is not None and st[1] > now:
             return st
         return OK, 0.0, ""
+
+    def note_sent(self, model: str, key: str) -> None:
+        """A request goes out through this model x key (for the requests-per-minute pacing)."""
+        with self._lock:
+            q = self._sent.setdefault((model, fingerprint(key)), deque(maxlen=128))
+            q.append(self.clock())
 
     def available(self, model: str, key: str) -> bool:
         return self.slot(model, key)[0] == OK
@@ -234,6 +270,8 @@ class KeyPool:
         partners: list[str] = []
         scored = False
         with self._lock:
+            if not daily:
+                self._paced.add((model, fp))      # a free-tier minute limit: pace this pair from now on
             self._slots[(model, fp)] = (state, now + wait, why)
             for (m, other), at in list(self._last429.items()):
                 if m == model and other != fp and now - at <= SHARED_WINDOW:

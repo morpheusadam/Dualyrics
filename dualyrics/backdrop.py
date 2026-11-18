@@ -4,7 +4,10 @@ The overlay is a per-pixel-alpha layered window (``UpdateLayeredWindow``); Windo
 window without also blurring its soft shadows and glow. So the blur lives in a second window: a click-through
 tool window placed exactly under the box, just below the overlay in z-order, with the Windows acrylic accent
 (``SetWindowCompositionAttribute``, ``ACCENT_ENABLE_ACRYLICBLURBEHIND``, Windows 10 1803 and later) or, where
-that is refused, the plain blur-behind accent. A window region clips it to the box's rounded corners. The
+that is refused, the plain blur-behind accent. A window region clips it to the box's rounded corners where
+Windows honours it; Windows 11 draws the accent over the whole window and ignores the region, so there the
+window gets DWM's own rounded corners (``DWMWA_WINDOW_CORNER_PREFERENCE``, 8 or 4 px at 96 DPI) and is inset
+just enough that those corners lie inside the template's larger ones (``blur_inset``). The
 overlay then draws the template's translucent tint, light rim and sheen on top, so the box is real frosted
 glass. When the accent cannot be set (older Windows, remote desktop, a driver that refuses it) the window is
 never shown and the template's simulated frost remains (docs/DESIGN.md 2.4).
@@ -14,6 +17,7 @@ from __future__ import annotations
 
 import ctypes
 import logging
+import math
 import sys
 import tkinter as tk
 from ctypes import wintypes
@@ -31,6 +35,9 @@ SWP_NOACTIVATE = 0x0010
 SWP_SHOWWINDOW = 0x0040
 SWP_NOOWNERZORDER = 0x0200
 TINT_ALPHA = 0x30          # the acrylic accent's own tint; the overlay's box tint is drawn on top of it
+DWMWA_WINDOW_CORNER_PREFERENCE = 33
+DWMWCP_DONOTROUND, DWMWCP_ROUND, DWMWCP_ROUNDSMALL = 1, 2, 3
+DWM_ROUND, DWM_ROUND_SMALL = 8.0, 4.0     # corner radii (px at 96 DPI) of DWMWCP_ROUND / DWMWCP_ROUNDSMALL
 
 
 def wanted(template: dict[str, Any]) -> bool:
@@ -48,6 +55,23 @@ def tint_abgr(hex_color: str, alpha: int = TINT_ALPHA) -> int:
     except (ValueError, TypeError, IndexError):
         r = g = b = 0
     return (max(0, min(255, alpha)) << 24) | (b << 16) | (g << 8) | r
+
+
+def corner_preference(radius: float, dpi_scale: float) -> tuple[int, float]:
+    """(DWM corner preference, its radius in px) for a box whose corners have ``radius`` px."""
+    if radius <= 1:
+        return DWMWCP_DONOTROUND, 0.0
+    if radius < DWM_ROUND * dpi_scale:
+        return DWMWCP_ROUNDSMALL, DWM_ROUND_SMALL * dpi_scale
+    return DWMWCP_ROUND, DWM_ROUND * dpi_scale
+
+
+def blur_inset(radius: float, dwm_radius: float) -> int:
+    """Pixels to move every edge of the blur window inwards so that its DWM corner (``dwm_radius``) lies inside
+    the box's rounder corner (``radius``): the corner circles touch when the inset is (R - r)(1 - 1/sqrt 2)."""
+    if radius <= dwm_radius:
+        return 0
+    return int(math.ceil((radius - dwm_radius) * (1 - 1 / math.sqrt(2))))
 
 
 def box_rect(pos: tuple[int, int], box: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
@@ -77,6 +101,40 @@ if IS_WINDOWS:
     _gdi32.CreateRoundRectRgn.argtypes = [ctypes.c_int] * 6
     _gdi32.CreateRoundRectRgn.restype = wintypes.HRGN
     _gdi32.DeleteObject.argtypes = [wintypes.HGDIOBJ]
+    try:
+        _dwm = ctypes.WinDLL("dwmapi")
+        _dwm.DwmSetWindowAttribute.argtypes = [wintypes.HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD]
+        _dwm.DwmSetWindowAttribute.restype = ctypes.c_long
+    except OSError:
+        _dwm = None
+    try:
+        _GetDpiForWindow = _user32.GetDpiForWindow
+        _GetDpiForWindow.argtypes = [wintypes.HWND]
+        _GetDpiForWindow.restype = wintypes.UINT
+    except AttributeError:      # before Windows 10 1607
+        _GetDpiForWindow = None
+
+
+def set_corner_preference(hwnd: int, pref: int) -> bool:
+    """Windows 11 DWM corner rounding; False where the attribute is unknown (Windows 10)."""
+    if not IS_WINDOWS or not hwnd or _dwm is None:
+        return False
+    val = ctypes.c_int(pref)
+    try:
+        return _dwm.DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, ctypes.byref(val),
+                                          ctypes.sizeof(val)) == 0
+    except OSError:
+        return False
+
+
+def window_dpi_scale(hwnd: int) -> float:
+    if not IS_WINDOWS or not hwnd or _GetDpiForWindow is None:
+        return 1.0
+    try:
+        dpi = int(_GetDpiForWindow(hwnd))
+    except OSError:
+        return 1.0
+    return dpi / 96.0 if dpi > 0 else 1.0
 
 
 def set_accent(hwnd: int, state: int, tint: int = 0) -> bool:
@@ -100,6 +158,7 @@ class Backdrop:
         self.shown = False
         self._geom: tuple[int, int, int, int] = (0, 0, 0, 0)
         self._radius = -1
+        self._shape: tuple[int, int] = (-1, 0)   # (DWM corner preference sent, 1 when Windows took it)
         self._tint = -1
         self._accent = 0
         self._excluded = False
@@ -156,6 +215,15 @@ class Backdrop:
             return False
         assert self.win is not None
         try:
+            # Windows 11 ignores the region under the accent: DWM corners, inset to fit inside the box's corners
+            pref, dwm_r = corner_preference(radius, window_dpi_scale(self.hwnd))
+            if pref != self._shape[0]:
+                self._shape = (pref, int(set_corner_preference(self.hwnd, pref)))
+            inset = blur_inset(radius, dwm_r) if self._shape[1] else 0   # Windows 10: the region does it
+            inset = min(inset, max(0, (min(w, h) - 4) // 2))
+            if inset:
+                x, y, w, h = x + inset, y + inset, w - 2 * inset, h - 2 * inset
+                radius = max(0, radius - inset)
             if (w, h, radius) != (self._geom[2], self._geom[3], self._radius):
                 d = max(0, radius) * 2
                 rgn = _gdi32.CreateRoundRectRgn(0, 0, w + 1, h + 1, d, d)
@@ -199,6 +267,7 @@ class Backdrop:
                 pass
         self.win, self.hwnd, self.shown = None, 0, False
         self._geom, self._radius, self._tint, self._accent = (0, 0, 0, 0), -1, -1, 0
+        self._shape = (-1, 0)
 
 
 def _user32_set_pos(hwnd: int, after: int, x: int, y: int, w: int, h: int) -> None:

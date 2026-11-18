@@ -10,15 +10,18 @@ asked (a better translation replaces it); while every Gemini key rests, the cach
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import threading
+import time
 from collections import OrderedDict
-from typing import Any
+from typing import Any, Iterator
 
-from dualyrics import langs, net
+from dualyrics import langs
 from dualyrics.linecache import PIVOT_TARGET
 from dualyrics.live.text import normalize
-from dualyrics.translate import KeysResting, TranslationError, fallback_chain, offline_ready
+from dualyrics.translate import (LIVE_DEADLINE, LIVE_TIMEOUT, ContentBlocked, KeysResting, TranslationError,
+                                 fallback_chain, is_looping, offline_ready)
 
 log = logging.getLogger(__name__)
 
@@ -60,6 +63,11 @@ def build_english_prompt(text: str) -> str:
     ])
 
 
+def _live_args() -> dict[str, Any]:
+    """``Gemini.ask`` options for one live line: no thinking, a short timeout and a deadline for all pairs."""
+    return {"timeout": LIVE_TIMEOUT, "live": True, "deadline": time.monotonic() + LIVE_DEADLINE}
+
+
 def _gemini_on(cfg: dict[str, Any]) -> bool:
     return cfg["provider"] == "gemini" and bool(cfg["gemini_keys"])
 
@@ -73,14 +81,15 @@ class LiveTranslator:
         self._cache: OrderedDict[tuple[str, str], tuple[str, str]] = OrderedDict()   # -> (translation, provider)
         self._english: OrderedDict[str, tuple[str, str]] = OrderedDict()   # pivot: (English, language)
         self._lock = threading.Lock()   # Live mode and the screen source translate on several threads
+        self._inflight = 0              # Gemini requests on their way (partials go to a cheaper tier meanwhile)
 
-    def _remember(self, key: tuple[str, str], value: str, provider: str = "") -> None:
+    def _remember(self, key: tuple[str, str], value: str, provider: str = "", store: bool = True) -> None:
         with self._lock:
             self._cache[key] = (value, provider)
             self._cache.move_to_end(key)
             while len(self._cache) > CACHE_SIZE:
                 self._cache.popitem(last=False)
-        if self.store is not None:
+        if store and self.store is not None:
             self.store.put(key[0], key[1], value, provider)
 
     def _gemini_can_ask(self, cfg: dict[str, Any]) -> bool:
@@ -145,9 +154,11 @@ class LiveTranslator:
         if _gemini_on(cfg) and not cfg["fallback_free"]:
             try:
                 data = self.translator.gemini.ask(cfg["gemini_keys"], cfg["gemini_models"],
-                                                  build_english_prompt(text), timeout=net.TIMEOUT_FAST)
+                                                  build_english_prompt(text), **_live_args())
                 if isinstance(data, dict):
                     english = str(data.get("english") or "").strip()
+                    if is_looping(english):
+                        english = ""
                     detected = str(data.get("language") or "").strip().lower()[:8]
                     provider = "gemini"
             except TranslationError:
@@ -167,8 +178,12 @@ class LiveTranslator:
         return english, detected or ""
 
     def translate(self, text: str, cfg: dict[str, Any], context: list[tuple[str, str]], source: str = "",
-                  where: str = "", title: str = "") -> tuple[str, str]:
-        """Returns (translation, state) with state done | skipped. Raises TranslationError."""
+                  where: str = "", title: str = "", partial: bool = False) -> tuple[str, str]:
+        """Returns (translation, state) with state done | skipped. Raises TranslationError.
+
+        ``partial``: an unfinished Live Captions sentence. While another Gemini request is still on its way it
+        goes to the free / offline tier (when one is allowed) and is kept in memory only; the finished
+        sentence always goes to Gemini and replaces it."""
         target = cfg["target_language"]
         if source and cfg.get("skip_same_language", True) and langs.same_language(source, target):
             return "", "skipped"
@@ -184,16 +199,22 @@ class LiveTranslator:
             return hit[0], "done"
         out, provider = "", ""
         gemini_failed = False
-        if _gemini_on(cfg):
+        cheap = partial and self.busy() and (cfg["fallback_free"] or offline_ready(self.translator, cfg, target,
+                                                                                    source))
+        if _gemini_on(cfg) and not cheap:
             prompt = build_live_prompt(text, context, target, source, where, title)
             try:
-                data = self.translator.gemini.ask(cfg["gemini_keys"], cfg["gemini_models"], prompt,
-                                                  timeout=net.TIMEOUT_FAST)
+                with self._asking():
+                    data = self.translator.gemini.ask(cfg["gemini_keys"], cfg["gemini_models"], prompt,
+                                                      **_live_args())
                 out = (data.get("translation") if isinstance(data, dict) else str(data or "")) or ""
                 out = str(out).strip().strip('"«»')
                 provider = "gemini"
+                if is_looping(out):
+                    log.info("live gemini answer repeats itself; using the next tier")
+                    out, gemini_failed = "", True
             except TranslationError as e:
-                if not isinstance(e, KeysResting):
+                if not isinstance(e, (KeysResting, ContentBlocked)):
                     log.info("live gemini failed: %s", e)
                 if not cfg["fallback_free"] and not offline_ready(self.translator, cfg, target, source):
                     raise
@@ -201,5 +222,20 @@ class LiveTranslator:
         if not out:
             out, _det, provider = self._fallback(text, target, cfg, source, gemini_failed)
         if out:
-            self._remember(key, out, provider)
+            self._remember(key, out, provider, store=not cheap)
         return out, "done"
+
+    def busy(self) -> bool:
+        """A Gemini request of this translator is on its way now."""
+        with self._lock:
+            return self._inflight > 0
+
+    @contextlib.contextmanager
+    def _asking(self) -> Iterator[None]:
+        with self._lock:
+            self._inflight += 1
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._inflight -= 1

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dualyrics"
-version = "2.2.0"
+version = "2.2.1"
 description = "Synced song lyrics and live captions with a translation under every line, as a floating overlay for Windows (Spotify, YouTube Music, Spotube, games and films)."
 readme = "README.md"
 license = { text = "MIT" }

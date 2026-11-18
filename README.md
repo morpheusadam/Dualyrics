@@ -34,15 +34,15 @@ Contents: [Quick start](#quick-start) · [Free Gemini key](#get-a-free-gemini-ap
 
 ## Quick start
 
-1. Download `Dualyrics-Setup-2.2.0.exe` from the [latest release](https://github.com/morpheusadam/Dualyrics/releases/latest) and run it. Setup is in English or Persian, needs no admin rights and installs for your Windows user only, into `%LOCALAPPDATA%\Programs\Dualyrics`.
+1. Download `Dualyrics-Setup-2.2.1.exe` from the [latest release](https://github.com/morpheusadam/Dualyrics/releases/latest) and run it. Setup is in English or Persian, needs no admin rights and installs for your Windows user only, into `%LOCALAPPDATA%\Programs\Dualyrics`.
 2. Dualyrics starts when Setup finishes, and the settings window opens the first time.
 3. Pick your language in **Settings › General › Translate into**, then play a song on Spotify or a video on YouTube.
 
 That is enough for lyrics and on-screen subtitles. For captions from the sound itself (games and videos without subtitles), add [Live mode](#live-mode) once.
 
-Prefer a portable copy? The release also has `Dualyrics.exe` (one file, no installation) and `Dualyrics-2.2.0-windows-x64.zip`. `SHA256SUMS.txt` lists the checksum of every file. Windows SmartScreen may warn about an unsigned app from a new publisher: choose **More info › Run anyway** if you trust the download, or [build it yourself](#build-from-source).
+Prefer a portable copy? The release also has `Dualyrics.exe` (one file, no installation) and `Dualyrics-2.2.1-windows-x64.zip`. `SHA256SUMS.txt` lists the checksum of every file. Windows SmartScreen may warn about an unsigned app from a new publisher: choose **More info › Run anyway** if you trust the download, or [build it yourself](#build-from-source).
 
-Upgrading keeps your settings: run the new Setup over the old version. Uninstall from **Windows Settings › Apps › Installed apps › Dualyrics**; the uninstaller asks whether to delete your settings too (the default keeps them). For scripts: `Dualyrics-Setup-2.2.0.exe /VERYSILENT /SUPPRESSMSGBOXES /TASKS="desktopicon,startup"`.
+Upgrading keeps your settings: run the new Setup over the old version. Uninstall from **Windows Settings › Apps › Installed apps › Dualyrics**; the uninstaller asks whether to delete your settings too (the default keeps them). For scripts: `Dualyrics-Setup-2.2.1.exe /VERYSILENT /SUPPRESSMSGBOXES /TASKS="desktopicon,startup"`.
 
 ## Get a free Gemini API key
 
@@ -88,7 +88,7 @@ For the app in front of you, Dualyrics uses the lines that app already provides 
 | Order | Source | Used for | How it works |
 |---|---|---|---|
 | 1 | Synced lyrics | Songs in Spotify, Spotube, music apps, browsers | LRCLIB lookup by title, artist, album and length; exact match only in browsers |
-| 2 | On-screen subtitles | YouTube captions, film subtitles, game subtitles | Windows UI Automation for web players in Chrome and Edge, otherwise offline Windows OCR of the subtitle area, 1 to 6 times a second |
+| 2 | On-screen subtitles | YouTube captions, film subtitles, game subtitles | Windows UI Automation for web players in Chrome and Edge, otherwise offline Windows OCR of the subtitle area, 1 to 6 times a second (a browser only fullscreen or with its own subtitle area) |
 | 3 | Audio (Live mode) | Anything without lyrics or subtitles | Speaker audio cut at pauses, recognised offline with Whisper |
 
 A subtitle that OCR or UI Automation reads again with a letter or two different counts as the same line: it keeps its translation, costs no new request and does not flicker. Every translated line is also kept on disk, so a replayed video or a game line you hear for the tenth time is shown at once, even after a restart.

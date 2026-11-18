@@ -209,13 +209,16 @@ def serve(stdin: BinaryIO, stdout: BinaryIO, server: McpServer) -> None:
 
 # ---------------------------------------------------------------- client configuration (Settings > AI & API)
 def launch_command() -> tuple[str, list[str], dict[str, str]]:
-    """How an MCP client starts this server: (command, arguments, environment)."""
+    """How an MCP client starts this server: (command, arguments, environment). A data folder set with
+    ``DUALYRICS_HOME`` (portable mode) is passed on, or the server would read another api.json and settings."""
+    home = os.environ.get("DUALYRICS_HOME")
+    env = {"DUALYRICS_HOME": home} if home else {}
     if getattr(sys, "frozen", False):
-        return sys.executable, ["--mcp"], {}
+        return sys.executable, ["--mcp"], env
     exe = Path(sys.executable)
     if exe.name.lower() == "pythonw.exe" and exe.with_name("python.exe").exists():
         exe = exe.with_name("python.exe")       # started from run.pyw: the console interpreter talks stdio
-    return str(exe), ["-m", "dualyrics.mcp"], {"PYTHONPATH": str(Path(__file__).resolve().parent.parent)}
+    return str(exe), ["-m", "dualyrics.mcp"], {"PYTHONPATH": str(Path(__file__).resolve().parent.parent), **env}
 
 
 def claude_desktop_config() -> str:

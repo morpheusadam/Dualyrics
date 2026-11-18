@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from dualyrics import sources as sources_mod
+from dualyrics.retry import Backoff, is_rate_limit
 from dualyrics.live import pivot
 from dualyrics.live.text import ContextWindow, LiveView
 from dualyrics.screen import dedupe
@@ -52,6 +53,7 @@ class Target:
     region: tuple[float, ...] = sources_mod.DEFAULT_OCR_REGION
     where: str = ""                # app or game name, for translation context
     title: str = ""
+    ocr: bool = True               # OCR may read it (a browser only fullscreen: sources.ocr_allowed)
 
 
 @dataclass
@@ -66,6 +68,7 @@ class ScreenCaption:
     trans_state: str = "pending"   # pending | done | skipped | failed
     via: str = "ocr"               # ocr | uia
     version: int = 0               # bumps when a more complete reading replaces the text (stale translations)
+    retry: Backoff = field(default_factory=Backoff)   # a failed translation is asked again while it is shown
 
 
 @dataclass
@@ -137,6 +140,12 @@ class ScreenReader:
     @property
     def running(self) -> bool:
         return self._want
+
+    @property
+    def grabs_screen(self) -> bool:
+        """OCR copies the screen now (the overlay must stay out of the grab); UI Automation alone needs not."""
+        t = self._target
+        return self._want and t is not None and t.ocr and bool(self.get_cfg().get("screen_ocr", True))
 
     def target_where(self) -> str:
         """The app or game being read, or its media title (for the usage meter)."""
@@ -237,7 +246,7 @@ class ScreenReader:
                 if now - self._uia_text_at < UIA_TRUST:   # this page gives its captions: no OCR needed
                     self.last_via = "uia"
                     return text or "", True
-        if not cfg.get("screen_ocr", True):
+        if not cfg.get("screen_ocr", True) or not target.ocr:
             return None, False
         ocr = self._ocr_reader(cfg.get("ocr_language", "auto"), now)
         if ocr is None:
@@ -280,6 +289,7 @@ class ScreenReader:
                 self._cap = None
                 self._memo.clear()
         cfg = self.get_cfg()
+        self._retry_due(now, cfg, target)
         mk = memo_key(cfg)
         with self._lock:
             if mk != self._memo_for:          # another target language or pivot: earlier translations do not fit
@@ -330,6 +340,19 @@ class ScreenReader:
             cap.trans_state = "skipped"
 
     # ------------------------------------------------------------------ translation
+    def _retry_due(self, now: float, cfg: dict[str, Any], target: Target) -> None:
+        """The caption on screen failed to translate a moment ago: ask again (``dualyrics/retry.py``)."""
+        with self._lock:
+            cap = self._cap
+            due = (cap is not None and cap.gone_at is None and cap.trans_state == "failed"
+                   and cap.retry.ready(now))
+            if due:
+                cap.retry.taken()
+                cap.trans_state = "pending"
+        if due and cfg.get("show_translation", True):
+            log.info("screen: translating the line again (attempt %d)", cap.retry.attempts + 1)
+            self._translate(cap, cfg, target)
+
     def _translate(self, cap: ScreenCaption, cfg: dict[str, Any], target: Target) -> None:
         self.context.resize(cfg.get("live_context_lines", 4))
         ctx = self.context.pairs()
@@ -337,11 +360,12 @@ class ScreenReader:
         mk = memo_key(cfg)
 
         def work() -> None:
+            err: BaseException | None = None
             try:
                 res = pivot.pivot_text(text, self.live_tr, cfg, ctx, where=target.where, title=target.title)
             except TranslationError as e:
                 log.info("screen translation failed: %s", e)
-                res = None
+                res, err = None, e
             except Exception:
                 log.exception("screen translation crashed")
                 res = None
@@ -350,7 +374,10 @@ class ScreenReader:
                     return                       # a more complete reading is being translated meanwhile
                 if res is None:
                     cap.trans_state = "failed"
+                    if err is not None:          # asked again while it is on screen
+                        cap.retry.failed(self._now, is_rate_limit(err))
                     return
+                cap.retry.ok()
                 shown = cap.translation
                 keep = dedupe.same_translation(shown, res.translation)   # only a character or two changed
                 cap.top, cap.extra, cap.trans_state = res.top, res.extra, res.state

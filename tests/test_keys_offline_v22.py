@@ -397,7 +397,7 @@ class CountingGemini:
         self.prompts, self.can = [], can
         self.meter = None
 
-    def ask(self, keys, models, prompt, timeout=None):
+    def ask(self, keys, models, prompt, timeout=None, **kw):
         self.prompts.append(prompt)
         return {"translation": "ترجمه"}
 

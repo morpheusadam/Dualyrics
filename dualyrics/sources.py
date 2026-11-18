@@ -117,6 +117,16 @@ def region_of(cfg: dict[str, Any], profile: dict[str, Any] | None = None) -> lis
     return validate_region(cfg.get("ocr_region") or DEFAULT_OCR_REGION)
 
 
+def ocr_allowed(profile: dict[str, Any], fullscreen: bool) -> bool:
+    """May OCR read this window? A browser in a window shows a web page: the bottom of its window holds page
+    text (comments, side panels, titles), not a video, and OCR of it gave "subtitles" that pushed Live aside.
+    So a browser is read with OCR only while it fills the screen (a fullscreen video) or when the user drew a
+    subtitle area for it; otherwise only its caption elements (UI Automation) count. Other kinds always."""
+    if profile.get("kind") != "browser":
+        return True
+    return bool(fullscreen or profile.get("ocr_region"))
+
+
 def screen_allowed(profile: dict[str, Any], via: str) -> bool:
     """May the foreground window be read for subtitles? Only when the matched profile is the app in front
     (never a background player while another app is in front), and only for video players, browsers,

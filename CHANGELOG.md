@@ -4,6 +4,39 @@ All notable changes to Dualyrics are listed here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [2.2.1] - 2026-11-18
+
+Fixes from the bug reports and from a review of Dualyrics next to nine open-source projects in its space
+(`docs/REVERSE_ENGINEERING.md`): Settings no longer freezes, the Liquid Glass blur keeps its rounded corners on
+Windows 11, a refused line no longer rests every Gemini key, live lines answer faster and cost fewer requests,
+and a failed line is asked again while it is on screen.
+
+### Fixed
+
+- Settings could stop responding (for 3 s on the Sources page, for good when a lock was involved) while the control API or any background work ran: tkinter variables, fonts and images were finalised by the garbage collector on whatever thread it ran, and a Tcl call from another thread waits for the Tk thread. Those finalizers now run on the Tk thread only (`dualyrics/tksafe.py`); the OCR language list is asked once per run.
+- Liquid Glass / Glass: Windows 11 ignores the window region under the acrylic blur, so square corners showed behind the rounded box. The blur window now gets DWM's own rounded corners and is inset just enough that they lie inside the template's corners, at the monitor's DPI (`dualyrics/backdrop.py`); Windows 10 keeps the region.
+- One Gemini answer blocked for safety (or a prompt-level block) put every key x model into a 20 s cooldown and the line failed. A content block now raises `ContentBlocked`: nothing rests, no other pair is asked, and the line comes from the free or offline tier. Requests send `safetySettings` at `BLOCK_NONE`; only a non-empty answer that is not JSON still cools its pair.
+- Live Captions: a cut word ("I am go") was sent 75 ms after a sentence started, a long sentence without punctuation cost 7 requests, Japanese and Chinese captions never split into sentences, and a full stop Live Captions took back cost a second request and a second caption. See `docs/ALGORITHM.md` section 4.
+- Whisper model downloads now resume by themselves after a dropped connection (6 attempts with growing pauses) instead of failing at the first broken transfer over a flaky proxy.
+- A caption updated in place kept showing "…" until its new translation came; it now keeps the last translation, also when the update fails.
+- Found by an end-to-end run on a real PC (Spotify, YouTube in Chrome in English and Turkish, dubbing, every Settings page, the overlay menu, MCP, a simulated daily quota):
+  - YouTube in a browser window, captions off: OCR read the bottom of the window (a side panel, page titles, ads) as "subtitles", so the source flipped between on-screen text and Live every few seconds and Live lost the speech in between. A browser is now read with OCR only while it fills the screen or when its profile has its own subtitle area; in a window only its caption elements (UI Automation) count.
+  - Live: when Whisper gave two or three sentences of one segment at once, only the newest one was shown and the others flashed for 0.1-0.4 s. Captions now queue: each stays at least the shortest time on screen (1.5 s), shared out when several wait (never under 0.7 s), so the overlay catches up within a couple of seconds; captions that waited unseen for more than 4 s are skipped.
+  - Choosing a template with placement hints from the overlay menu, a hotkey or the tray opened its "apply these too?" question inside the app's tick: the overlay, Live captions, hotkeys and the control API stopped until it was answered (and it can sit behind a fullscreen video). The question is now asked from the event loop, once at a time.
+  - The overlay was hidden from screen recordings and screenshots whenever the screen reader ran, also when only UI Automation read (nothing is grabbed then); now only while OCR reads.
+  - `get_status` still reported the last track as playing after its player was closed.
+  - With a portable data folder (`DUALYRICS_HOME`) the MCP client snippets in Settings › AI & API did not pass it on, so the MCP server read another `api.json`.
+  - `comtypes` and `asyncio` debug lines no longer fill the log.
+
+### Changed
+
+- Live and on-screen lines ask Gemini with thinking switched off (2.5 Flash / Flash-Lite and the `-latest` aliases; the low thinking level for Gemini 3), a cap on the answer, a 4 s / 6 s timeout and a 5 s deadline for all keys together before the next tier. A model that rejects the thinking setting is asked again without it and remembered. An answer that repeats itself, or is cut at the cap, is not used. Whole songs keep thinking.
+- A failed Live or on-screen line is asked again while it is shown: after 1 s and 2 s, or 4 s and 8 s after a rate limit, at most 3 attempts within 45 s (`dualyrics/retry.py`).
+- Long Live and on-screen captions keep their newest words (the first kept line starts with `…`, preferably after a clause mark); lyrics keep their start.
+- A key x model that hit a per-minute limit is paced afterwards to its free-tier requests per minute, so bursts are spread over the keys; keys that never hit a minute limit (paid keys) are never slowed down.
+- Lyrics search hits are scored by title and artist similarity too, so a cover of the same length loses to the original.
+- Whisper pieces of 2 s or more with three letters or fewer are dropped as noise (not for CJK or Live Captions).
+
 ## [2.2.0] - 2026-11-18
 
 Windows 11 Live Captions as a speech engine, Silero voice detection and sentence-by-sentence captions for long speech, per-app audio capture, Gemini keys that take turns (keys from different Google Cloud projects add up their quota), an offline translator as the last fallback, a line cache and near-duplicate detection so repeated subtitles cost no request, and a female or male dubbing voice per language.
@@ -146,7 +179,8 @@ First public release.
 - A slow lyrics or translation load can no longer write into the state of the next song.
 - Quit ends the process right away instead of waiting up to about 75 seconds for unfinished network requests.
 
-[Unreleased]: ../../compare/v2.2.0...HEAD
+[Unreleased]: ../../compare/v2.2.1...HEAD
+[2.2.1]: ../../compare/v2.2.0...v2.2.1
 [2.2.0]: ../../compare/v2.1.0...v2.2.0
 [2.1.0]: ../../compare/v2.0.0...v2.1.0
 [2.0.0]: ../../compare/v1.0.0...v2.0.0

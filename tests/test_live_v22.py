@@ -294,23 +294,26 @@ def test_latest_sentence_is_after_the_last_terminator():
     assert W.latest_sentence("") == ""
 
 
-def test_tracker_emits_on_sentence_end_idle_and_every_three_changes():
+def test_tracker_emits_on_sentence_end_idle_and_rationed_partials():
     t = W.SentenceTracker()
     assert t.feed("Old text from before. Hello", 0.0) == []
     assert t.feed("Old text from before. Hello there", 0.03) == []
-    out = t.feed("Old text from before. Hello there my", 0.06)
-    assert [(e.text, e.done) for e in out] == [("Hello there my", False)]          # third change
-    assert t.feed("Old text from before. Hello there my friend", 0.1) == []
-    assert t.feed("Old text from before. Hello there my friend", 1.0) == []
-    out = t.feed("Old text from before. Hello there my friend", 1.4)
-    assert [(e.text, e.done) for e in out] == [("Hello there my friend", False)]   # 1.25 s unchanged
+    assert t.feed("Old text from before. Hello there my", 0.06) == []      # three changes, but too early
+    out = t.feed("Old text from before. Hello there my friend", 1.6)
+    assert [(e.text, e.done) for e in out] == [("Hello there my friend", False)]   # 1.5 s after its start
     key = out[0].key
-    assert t.feed("Old text from before. Hello there my friend", 3.0) == []         # sent once
-    out = t.feed("Old text from before. Hello there my friend. How", 3.1)
-    assert [(e.text, e.done, e.key) for e in out] == [("Hello there my friend.", True, key)]
-    out = t.feed("Old text from before. Hello there my friend. How are you? I", 3.2)
-    assert [(e.text, e.done) for e in out] == [("How are you?", True)] and out[0].key != key
-    assert t.feed("", 3.3) == [] and not t.active
+    assert t.feed("Old text from before. Hello there my friend how", 2.0) == []
+    assert t.feed("Old text from before. Hello there my friend how are", 2.1) == []
+    assert t.feed("Old text from before. Hello there my friend how are you", 2.2) == []   # next gap is 3 s
+    assert t.feed("Old text from before. Hello there my friend how are you", 3.0) == []
+    out = t.feed("Old text from before. Hello there my friend how are you", 3.5)
+    assert [(e.text, e.done, e.key) for e in out] == [("Hello there my friend how are you", False, key)]  # idle
+    assert t.feed("Old text from before. Hello there my friend how are you", 4.0) == []         # sent once
+    out = t.feed("Old text from before. Hello there my friend how are you. And", 4.1)
+    assert [(e.text, e.done, e.key) for e in out] == [("Hello there my friend how are you.", True, key)]
+    out = t.feed("Old text from before. Hello there my friend how are you. And then? I", 4.2)
+    assert [(e.text, e.done) for e in out] == [("And then?", True)] and out[0].key != key
+    assert t.feed("", 4.3) == [] and not t.active
 
 
 def test_tracker_ignores_text_that_was_there_before_and_after_reset():
@@ -319,7 +322,59 @@ def test_tracker_ignores_text_that_was_there_before_and_after_reset():
     assert t.feed("First. Second.", 5.0) == []
     t.reset()
     assert t.feed("First. Second. Third.", 6.0) == []
-    assert [e.text for e in t.feed("First. Second. Third. Fourth.", 6.1)] == ["Fourth."]
+    assert t.feed("First. Second. Third. Fourth.", 6.1) == []          # a full stop at the end: confirmed ...
+    assert [e.text for e in t.feed("First. Second. Third. Fourth.", 6.25)] == ["Fourth."]   # ... 0.1 s later
+
+
+def test_a_long_sentence_without_punctuation_costs_at_most_three_requests():
+    words = ("so what we are going to do today is take a look at the new update and see how the changes "
+             "affect us").split()
+    assert len(words) == 23
+    t = W.SentenceTracker()
+    t.feed("Intro.", 0.0)
+    emits, now = [], 0.0
+    for i in range(len(words)):
+        now = 0.1 + 0.3 * i
+        for step in range(12):                  # Live Captions is read every 25 ms
+            emits += t.feed("Intro. " + " ".join(words[:i + 1]), now + step * 0.025)
+    for k in range(80):                          # the speaker pauses for 2 s
+        emits += t.feed("Intro. " + " ".join(words), now + 0.3 + k * 0.025)
+    assert 1 <= len(emits) <= 3 and all(not e.done for e in emits)
+    assert emits[0].text.count(" ") >= 4                     # never the first word or two
+    assert emits[-1].text == " ".join(words) and len({e.key for e in emits}) == 1
+
+
+def test_a_cut_word_is_not_sent_right_after_the_sentence_starts():
+    t = W.SentenceTracker()
+    t.feed("Hi.", 0.0)
+    got = []
+    for i, text in enumerate(["Hi. I", "Hi. I am", "Hi. I am go", "Hi. I am going"]):
+        got += t.feed(text, 0.025 * (i + 1))
+    assert got == []
+
+
+def test_an_early_full_stop_is_confirmed_or_keeps_its_caption():
+    t = W.SentenceTracker()
+    t.feed("Okay.", 0.0)
+    got = t.feed("Okay. I think we.", 0.1) + t.feed("Okay. I think we.", 0.15)    # only 50 ms: not believed
+    got += t.feed("Okay. I think we should go now.", 0.2) + t.feed("Okay. I think we should go now.", 0.35)
+    assert [(e.text, e.done) for e in got] == [("I think we should go now.", True)]
+    t2 = W.SentenceTracker()
+    t2.feed("Okay.", 0.0)
+    first = t2.feed("Okay. I think we.", 0.1) + t2.feed("Okay. I think we.", 0.3)   # confirmed: sent
+    rest = t2.feed("Okay. I think we should", 0.5) + t2.feed("Okay. I think we should go now.", 0.6)
+    rest += t2.feed("Okay. I think we should go now.", 0.8)
+    assert [(e.text, e.done) for e in first] == [("I think we.", True)]
+    assert [(e.text, e.done) for e in rest] == [("I think we should go now.", True)]
+    assert rest[-1].key == first[0].key              # the same caption, updated in place
+
+
+def test_cjk_line_breaks_end_sentences_and_spaces_before_marks_go():
+    assert W.sentences("今日は天気がいいですね\n明日も晴れるでしょう\nでは") == [
+        ("今日は天気がいいですね。", True), ("明日も晴れるでしょう。", True), ("では", False)]
+    assert W.sentences("はい\nそうです") == [("はいそうです", False)]           # a short line: joined
+    assert W.sentences("Line one\nand two") == [("Line one and two", False)]
+    assert W.sentences("Hello there . How") == [("Hello there.", True), ("How", False)]
 
 
 # ---------------------------------------------------------------- Live Captions: choice and availability
@@ -499,10 +554,10 @@ class FakeReader:
 def test_runner_reads_recovers_and_restarts():
     app = FakeApp()
     got = []
-    reader = FakeReader(["Hi", None, "Hi there", "Hi there friend", "Hi there friend."])
+    reader = FakeReader(["Hi", None, "Hi there", "Hi there friend", "Hi there friend.", "Hi there friend."])
     r = W.CaptionsRunner(app, reader, got.append, box_timeout=5)
     r.start(0.0)
-    for i in range(5):
+    for i in range(6):
         r.step(0.1 * (i + 1))                        # a None read (element not available) is just retried
     assert [(e.text, e.done) for e in got][-1] == ("Hi there friend.", True)
     app.hwnd = 0                                     # the user closed Live Captions
@@ -628,7 +683,7 @@ def test_live_captions_loop_in_the_engine_with_fakes(monkeypatch):
     eng = new_engine(cfg)
     monkeypatch.setattr(W, "availability", lambda force=False, max_age=60.0: AV)
     texts = ["Earlier line.", "Earlier line. Where", "Earlier line. Where are", "Earlier line. Where are we",
-             "Earlier line. Where are we going?"]
+             "Earlier line. Where are we going?"] + ["Earlier line. Where are we going?"] * 6
 
     class Reader(FakeReader):
         def read(self, hwnd):

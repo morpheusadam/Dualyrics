@@ -19,7 +19,7 @@ from typing import Any, Callable
 
 from dualyrics import (APP_ID, REPO_URL, __version__, automode, cache as cache_mod, fonts, i18n, langs, net, paths,
                        procs, profiles as profiles_mod, sources as sources_mod, startup, sync,
-                       templates as templates_mod, usage as usage_mod, winutil)
+                       templates as templates_mod, tksafe, usage as usage_mod, winutil)
 from dualyrics.api import ControlServer
 from dualyrics.control import Controller
 from dualyrics.dub import scheduler as dub_sch
@@ -106,7 +106,7 @@ def setup_logging(debug: bool = False) -> None:
         console = logging.StreamHandler()
         console.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
         root.addHandler(console)
-    for noisy in ("urllib3", "PIL", "faster_whisper"):
+    for noisy in ("urllib3", "PIL", "faster_whisper", "comtypes", "asyncio"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
     sys.excepthook = lambda *exc: log.critical("uncaught exception", exc_info=exc)
     threading.excepthook = lambda a: log.critical("uncaught exception in thread %s", a.thread,
@@ -182,6 +182,7 @@ class App:
         self._screen_avail: dict[str, bool] = {}
         self._capture_excluded = False
 
+        tksafe.install()               # tkinter finalizers run on the Tk thread only (no cross-thread deadlock)
         self.root = tk.Tk()
         self.root.withdraw()
         self.root.title("Dualyrics")
@@ -624,10 +625,28 @@ class App:
         if not want or all(s[k] == v for k, v in want.items()):
             return
         if ask:
-            from tkinter import messagebox
+            # asked from the event loop, never inside the tick that ran this command (overlay menu, hotkey,
+            # API): a modal question there stopped the ticks, so the overlay, Live and the control API froze
+            # until it was answered, and it can sit behind a fullscreen video
+            self.root.after(0, lambda: self._offer_hints(tid, want, parent))
+            return
+        self._apply_hints(want)
 
-            if not messagebox.askyesno("Dualyrics", i18n.t("tpl_hints_offer"), parent=parent or self.root):
-                return
+    def _offer_hints(self, tid: str, want: dict[str, Any], parent: Any = None) -> None:
+        from tkinter import messagebox
+
+        if self._stopping or self.effective_cfg()["template"] != tid or getattr(self, "_hints_open", False):
+            return                       # another template was chosen meanwhile, or a question is open already
+        self._hints_open = True
+        try:
+            yes = messagebox.askyesno("Dualyrics", i18n.t("tpl_hints_offer"), parent=parent or self.root)
+        finally:
+            self._hints_open = False
+        if yes and self.effective_cfg()["template"] == tid:
+            self._apply_hints(want)
+
+    def _apply_hints(self, want: dict[str, Any]) -> None:
+        s = self.settings
         if "position_preset" in want:
             self._set_preset(want.pop("position_preset"))
         if want:
@@ -887,6 +906,7 @@ class App:
             self.root.after(TICK_MS, self._tick)
 
     def _pump(self) -> None:
+        tksafe.drain()
         for _ in range(50):
             try:
                 item = self.q.get_nowait()
@@ -1177,7 +1197,7 @@ class App:
             status = status or preview      # alone: the dim status line of the template
             preview = ""
         return Content(original=v.original, translation=v.translation, next=v.extra or preview, status=status,
-                       song=song)
+                       song=song, tail=True)
 
     def _current_view(self) -> Any:
         if self.decision.mode == automode.SCREEN:
@@ -1196,7 +1216,7 @@ class App:
             return False
         cfg = self.effective_cfg()
         ok = False
-        if cfg["screen_ocr"]:
+        if cfg["screen_ocr"] and sources_mod.ocr_allowed(prof, fg.fullscreen):
             ok = self._screen_available("ocr")
         if not ok and cfg["screen_uia"] and prof.get("kind") == "browser":
             ok = self._screen_available("uia")
@@ -1234,14 +1254,15 @@ class App:
             self.screen.start(Target(
                 hwnd=fg.hwnd, key=str(prof.get("id") or ""), kind=str(prof.get("kind") or "other"),
                 region=tuple(sources_mod.region_of(cfg, prof if self.settings["profiles_enabled"] else None)),
-                where=where, title=f"{tr.artist} — {tr.title}" if tr and self.media.playing else ""))
+                where=where, title=f"{tr.artist} — {tr.title}" if tr and self.media.playing else "",
+                ocr=sources_mod.ocr_allowed(prof, fg.fullscreen)))
         elif self.screen.running:
             if not self._screen_off_since:
                 self._screen_off_since = now
             elif now - self._screen_off_since > SCREEN_STOP_GRACE:
                 log.info("screen source: stopped reading")
                 self.screen.stop()
-        excluded = self.screen.running
+        excluded = self.screen.grabs_screen     # screen recordings keep the overlay while only UIA reads
         if excluded != self._capture_excluded and self.overlay.hwnd:
             self.overlay.set_capture_excluded(excluded)
             self._capture_excluded = excluded

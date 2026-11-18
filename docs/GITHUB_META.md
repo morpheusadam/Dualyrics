@@ -41,7 +41,7 @@ Upload `docs/social-preview.png` (1280 x 640) in **Settings › General › Soci
 | Features › Wiki, Projects | Off | Everything lives in the README and `docs/` |
 | Security › Private vulnerability reporting | On | `SECURITY.md` points reporters to it |
 | Labels | `bug`, `enhancement`, `translation`, `good first issue`, `help wanted` | Used by the issue forms and `docs/GOOD_FIRST_ISSUES.md` |
-| Releases | Tag `v2.2.0`; the release workflow attaches the exe, zip, Setup and `SHA256SUMS.txt` | The README badges and download links point at the latest release |
+| Releases | Tag `v2.2.1`; the release workflow attaches the exe, zip, Setup and `SHA256SUMS.txt` | The README badges and download links point at the latest release |
 | Pinned issue | "Linux version: star the repo to vote (review on 2026-12-17)" | Turns the roadmap promise into a visible counter |
 
 ## Release title and summary (v2.2.0)

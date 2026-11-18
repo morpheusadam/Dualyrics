@@ -127,7 +127,7 @@ class _FakeGemini:
     def __init__(self):
         self.prompts = []
 
-    def ask(self, keys, models, prompt, timeout=None):
+    def ask(self, keys, models, prompt, timeout=None, **kw):
         self.prompts.append(prompt)
         return {"translation": "پسر!"}
 

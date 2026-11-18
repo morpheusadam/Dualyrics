@@ -239,13 +239,22 @@ caption text for 15 s means Live Captions cannot work. A closed Live Captions is
 a row (the count resets after a minute of work). After that, or when it does not open its window within 10 s,
 Live mode switches to Whisper by itself and tries Live Captions again after 10 minutes or a settings change.
 
-**Sentences.** The box text (newlines as spaces) is split at sentence terminators (`. ! ? …` and `。！？؟।۔`;
-not inside abbreviations such as "Mr." or "U.S." or in numbers). Complete sentences that are already there when
-reading starts, after a pause or after a restart are never sent. The newest, unfinished sentence is sent when
-it ends, when it has not changed for 1.25 s, or after 3 changes. Each sentence has a key: an event with the key
-of the caption on screen updates that caption in place and translates it again (a change of punctuation only
-is shown without a new translation). A finished sentence makes its caption final, so the next sentence is a new
-caption. Only the last two sentences can produce events; an older line that Live Captions revises is ignored.
+**Sentences.** The box text is joined into one line: newlines become spaces, except in Japanese and Chinese,
+where Live Captions breaks lines instead of writing `。`: a CJK line of 24 bytes or more ends a sentence there, a
+shorter one is joined without a space; spaces before `. , ! ?` and around `。！？，、` are dropped. It is split at
+sentence terminators (`. ! ? …` and `。！？؟।۔`; not inside abbreviations such as "Mr." or "U.S." or in
+numbers). Complete sentences that are already there when reading starts, after a pause or after a restart are
+never sent. A full stop at the very end is believed only after 0.1 s (Live Captions sometimes takes one back
+and goes on); a finished sentence that goes on within 4 s keeps its caption. The newest, unfinished sentence is
+sent when it ends, when it has not changed for 1.25 s, or after 3 changes once 1.5 s have passed since its start
+or its last partial, the gap doubling per partial (up to 6 s); a change counts only from 10 UTF-8 bytes, so a cut
+word right after a sentence starts is never sent, and a 23-word sentence without punctuation costs at most three
+requests. While a Gemini request is on its way, a partial goes to the free or offline tier (when allowed) and is
+not stored in the line cache; the finished sentence always goes to Gemini and replaces it. Each sentence has a
+key: an event with the key of the caption on screen updates that caption in place and translates it again (a
+change of punctuation only is shown without a new translation; the last translation stays on screen until the
+new one comes). A finished sentence makes its caption final, so the next sentence is a new caption. Only the last
+two sentences can produce events; an older line that Live Captions revises is ignored.
 
 **Stale translations.** A new version of a caption cancels the queued translation of its older version. With
 Live Captions, which sends many quick updates, a finished translation also cancels the queued translations of
@@ -347,8 +356,12 @@ A caption stays on screen for `clamp(min, chars / cps, 8 s)` from the moment it 
 translation arrived), where `chars` is the longer line plus half the shorter one (the reader reads one fully
 and skims the other) and `cps` is the reading speed (17 characters per second by default). With "translation
 only", only the translation counts. While speech continues, a caption stays 2 s longer so the overlay does
-not flicker between lines. A newer caption always replaces the current one: Live never queues behind the
-speaker.
+not flicker between lines. A newer caption replaces the current one once that one has been on screen for the
+shortest time (`live_min_display`, 1.5 s): Whisper often gives two or three sentences of one segment at once,
+and showing only the newest one flashed the others for a tenth of a second. With several captions waiting the
+shortest time is shared out (never under 0.7 s), so the overlay catches up with the speaker within a couple of
+seconds instead of queueing behind; captions that waited unseen for more than 4 s (the overlay showed another
+source) are skipped.
 
 ### Transcripts and pause
 
@@ -397,8 +410,11 @@ running after its source is no longer wanted), nothing is grabbed, read or sent 
 2. **OCR** of the subtitle area of the window's client area (setting, as fractions, default 8-92 % across
    and 66-97 % down; per profile with the picker). Windows.Media.Ocr, offline and free; the language is
    automatic (the Windows profile languages) or fixed. The area is copied from the screen with GDI without
-   `CAPTUREBLT`, and our overlay is excluded from capture (`WDA_EXCLUDEFROMCAPTURE`) while the reader runs,
-   so OCR never reads our own lines.
+   `CAPTUREBLT`, and our overlay is excluded from capture (`WDA_EXCLUDEFROMCAPTURE`) while OCR reads,
+   so OCR never reads our own lines (while only UI Automation reads, screen recordings keep the overlay).
+   A browser is read with OCR only while its window fills the screen (a fullscreen video) or when its
+   profile has its own subtitle area: in a window the bottom of a browser holds page text (comments, side
+   panels), and OCR of it turned page text into "subtitles" that pushed Live aside.
 
 The reader samples 1 to 6 times a second (setting, 3.5 by default).
 

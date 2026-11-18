@@ -125,6 +125,49 @@ def _unique(lines: list[str]) -> tuple[list[str], list[int]]:
 NOTICE_EVERY = 60.0   # seconds between two "switched model/key" notices for the same pair
 
 
+class ContentBlocked(TranslationError):
+    """Gemini refused this text (``promptFeedback.blockReason`` or a SAFETY / PROHIBITED_CONTENT / BLOCKLIST /
+    SPII / RECITATION finish). The key and the model are fine: nothing rests, no other pair is tried (it would
+    block the same text) and the caller answers this one line from the next tier."""
+
+
+BLOCK_REASONS = frozenset({"SAFETY", "PROHIBITED_CONTENT", "BLOCKLIST", "SPII", "RECITATION", "IMAGE_SAFETY"})
+SAFETY_OFF = [{"category": c, "threshold": "BLOCK_NONE"} for c in (
+    "HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_HATE_SPEECH", "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+    "HARM_CATEGORY_DANGEROUS_CONTENT")]
+LIVE_TIMEOUT = (4, 6)       # (connect, read) of one live-line request
+LIVE_DEADLINE = 5.0         # seconds a live line waits for Gemini (all pairs together) before the next tier
+
+
+def live_generation(model: str) -> dict[str, Any]:
+    """generationConfig additions for one short live line: no (or little) thinking and a cap on the answer.
+    The models that can switch thinking off (2.5 Flash / Flash-Lite, the ``*-latest`` aliases) get a budget of
+    0 and 256 tokens; Gemini 3 gets the low thinking level and room for it; others only a looser cap."""
+    m = model.lower()
+    if "gemini-3" in m:
+        return {"maxOutputTokens": 2048, "thinkingConfig": {"thinkingLevel": "low"}}
+    if ("2.5-flash" in m or m.endswith("-latest")) and "pro" not in m:
+        return {"maxOutputTokens": 256, "thinkingConfig": {"thinkingBudget": 0}}
+    return {"maxOutputTokens": 2048}
+
+
+def is_looping(text: str) -> bool:
+    """A degenerate answer that repeats itself: at least 40 characters made of one piece of >= 8 characters
+    over and over (the idea of LiveTranslate's check, written here)."""
+    s = (text or "").strip()
+    if len(s) < 40:
+        return False
+    for size in range(8, len(s) // 2 + 1):
+        unit = s[:size]
+        if (unit * (len(s) // size + 1)).startswith(s):
+            return True
+    return False
+
+
+class _Truncated(Exception):
+    """The answer hit maxOutputTokens before it was complete (no key or model is at fault)."""
+
+
 class KeysResting(TranslationError):
     """No Gemini key x model can be asked now (all rate limited, out of daily quota, rejected or switched off):
     the caller goes straight to the next translator instead of retrying line by line."""
@@ -151,6 +194,7 @@ class Gemini:
         self.on_notice: Callable[[str, dict[str, Any]], None] | None = None
         self._noticed: dict[tuple[str, str], float] = {}
         self._resting = False            # every key was resting at the last request (one notice per episode)
+        self._no_thinking: set[str] = set()   # models that answered 400 to a thinking setting
 
     # -- the key pool (dualyrics/keypool.py); the old names stay for the dubbing engines
     def _cooldown(self, model: str, key: str, seconds: float) -> None:
@@ -209,6 +253,10 @@ class Gemini:
         """One ``generateContent`` request, counted in the usage meter. Returns (json, status, message, raw
         error body). Network errors are raised (and counted as failed requests)."""
         try:
+            self.pool.note_sent(model, key)
+        except Exception:  # noqa: BLE001 - a pool without pacing (tests, dubbing fakes)
+            pass
+        try:
             r = self.session_factory().post(GEMINI_URL.format(model=model), headers={"x-goog-api-key": key},
                                             json=body, timeout=timeout)
         except Exception:
@@ -243,29 +291,53 @@ class Gemini:
         return data, status, msg
 
     def _call(self, model: str, key: str, prompt: str, timeout: Any = net.TIMEOUT_SLOW,
-              json_mode: bool = True) -> tuple[Any, int, str, str]:
-        body: dict[str, Any] = {"contents": [{"role": "user", "parts": [{"text": prompt}]}],
-                                "generationConfig": {"temperature": 0.4}}
+              json_mode: bool = True, gen: dict[str, Any] | None = None) -> tuple[Any, int, str, str]:
+        """One request. Raises ContentBlocked when Gemini refused the text (or answered nothing) and
+        json.JSONDecodeError for a non-empty answer that is not JSON."""
+        config: dict[str, Any] = {"temperature": 0.4}
+        if gen:
+            config.update(gen)
         if json_mode:
-            body["generationConfig"]["responseMimeType"] = "application/json"
+            config["responseMimeType"] = "application/json"
+        body: dict[str, Any] = {"contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                                "generationConfig": config, "safetySettings": SAFETY_OFF}
         j, status, msg, raw = self.post(model, key, body, timeout)
         if j is None:
             return None, status, msg, raw
+        blocked = str((j.get("promptFeedback") or {}).get("blockReason") or "")
+        if blocked and blocked != "BLOCK_REASON_UNSPECIFIED":
+            raise ContentBlocked(f"{model}: blocked ({blocked})")
         cands = j.get("candidates") or []
         if not cands:
-            return None, 200, "empty answer (blocked?)", ""
-        parts = cands[0].get("content", {}).get("parts", [])
+            raise ContentBlocked(f"{model}: empty answer (blocked)")
+        finish = str(cands[0].get("finishReason") or "")
+        parts = (cands[0].get("content") or {}).get("parts") or []
         text = "".join(p.get("text", "") for p in parts if not p.get("thought"))
+        if finish in BLOCK_REASONS:
+            raise ContentBlocked(f"{model}: blocked ({finish})")
         if not json_mode:
             return text, 200, "", ""
         text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip())
-        return json.loads(text), 200, "", ""
+        if not text:
+            if finish == "MAX_TOKENS":
+                raise _Truncated(f"{model}: answer cut at maxOutputTokens")
+            raise ContentBlocked(f"{model}: empty answer ({finish or 'no reason'})")
+        try:
+            return json.loads(text), 200, "", ""
+        except json.JSONDecodeError:
+            if finish == "MAX_TOKENS":
+                raise _Truncated(f"{model}: answer cut at maxOutputTokens") from None
+            raise
 
-    def ask(self, keys: list[str], models: list[str], prompt: str, timeout: Any = net.TIMEOUT_SLOW) -> Any:
+    def ask(self, keys: list[str], models: list[str], prompt: str, timeout: Any = net.TIMEOUT_SLOW,
+            live: bool = False, deadline: float | None = None) -> Any:
         """One answer from the key pool: the models in the user's order, the enabled keys in round robin, pairs
         that rest (rate limited, out of daily quota, rejected, switched off) skipped. A 429 moves on to the next
         key, then the next model, with a notice. Raises KeysResting when nothing can be asked (at once, without
-        a request), else TranslationError."""
+        a request), ContentBlocked when Gemini refused the text (nothing rests), else TranslationError.
+
+        ``live``: a short live line (little or no thinking and a cap on the answer, ``live_generation``).
+        ``deadline``: a ``time.monotonic()`` value after which no further pair is tried."""
         if not keys:
             raise TranslationError("no Gemini API key")
         plan = self.pool.order(keys, models)
@@ -274,11 +346,30 @@ class Gemini:
             raise KeysResting("every Gemini key is resting (rate limit, daily quota, rejected or switched off)")
         last = "all models are cooling down"
         limited: tuple[str, str] | None = None     # the first model x key that answered 429 in this request
+        skip_models: set[str] = set()
         for model, key in plan:
-            if not self.pool.available(model, key):
+            if model in skip_models or not self.pool.available(model, key):
                 continue                            # marked meanwhile (a key of the same project ran out)
+            if deadline is not None and time.monotonic() >= deadline:
+                last = f"{last} (out of time)"
+                break
+            gen = self._generation(model) if live else None
             try:
-                data, status, msg, raw = self._call(model, key, prompt, timeout=timeout)
+                data, status, msg, raw = self._call(model, key, prompt, timeout, True, gen)
+                if status == 400 and gen and "thinkingConfig" in gen and "thinking" in f"{msg} {raw}".lower():
+                    with self._lock:
+                        self._no_thinking.add(model)     # this model takes no thinking setting: ask without it
+                    gen = self._generation(model)
+                    data, status, msg, raw = self._call(model, key, prompt, timeout, True, gen)
+            except ContentBlocked as e:
+                self.pool.mark_ok(model, key)            # the key answered; only this text was refused
+                self._resting = False
+                log.info("gemini refused the text: %s", e)
+                raise
+            except _Truncated as e:
+                skip_models.add(model)                   # the same text would be cut again on this model
+                last = str(e)
+                continue
             except json.JSONDecodeError as e:
                 self.pool.cooldown(model, key, 20, "bad JSON")
                 last = f"{model}: bad JSON ({e})"
@@ -319,6 +410,13 @@ class Gemini:
         if limited is not None:
             last = f"rate limited: {last}"
         raise TranslationError(last)
+
+    def _generation(self, model: str) -> dict[str, Any]:
+        gen = live_generation(model)
+        with self._lock:
+            if model in self._no_thinking:
+                gen.pop("thinkingConfig", None)
+        return gen
 
     def _all_resting(self, keys: list[str], models: list[str]) -> None:
         """One notice when the pool runs dry (until a key works again)."""
@@ -545,8 +643,10 @@ class Translator:
         pool = self.gemini.pool
         for model in models:
             try:
-                data, status, msg, raw = self.gemini._call(model, key, "Reply with the single word OK.",
-                                                           timeout=(8, 30), json_mode=False)
+                _data, status, msg, raw = self.gemini._call(model, key, "Reply with the single word OK.",
+                                                            timeout=(8, 30), json_mode=False)
+            except ContentBlocked:
+                status, msg, raw = 200, "", ""     # the key works; only the test text was refused
             except Exception as e:  # noqa: BLE001
                 out.append((model, False, str(e)[:160]))
                 continue

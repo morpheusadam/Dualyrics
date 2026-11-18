@@ -60,6 +60,7 @@ class Content:
     index: int = -1                            # synced line index (for "edit this line")
     line_start: float = -1.0                   # karaoke: position (s) where the line starts ...
     line_end: float = -1.0                     # ... and where the next one starts
+    tail: bool = False                         # Live / on-screen captions: a long line keeps its newest words
 
 
 class Host(Protocol):
@@ -251,13 +252,14 @@ class Overlay:
             self._auto_scroll(content.progress)
             return
         sig = ("synced", content.original, content.translation, content.next, content.status, content.speaker,
-               self._tpl_key, s, max_w, hit, tuple(self._show_flags().items()), mon.name)
+               self._tpl_key, s, max_w, hit, tuple(self._show_flags().items()), mon.name, content.tail)
         self._kara_timing = (content.line_start, content.line_end)
         if not force and sig == self._sig:
             return
         text_changed = self._sig is None or self._sig[0] != "synced" or self._sig[1:3] != sig[1:3]
         self._sig = sig
-        lines = render.Lines(content.original, content.translation, content.next, content.speaker, content.status)
+        lines = render.Lines(content.original, content.translation, content.next, content.speaker, content.status,
+                             content.tail)
         try:
             frame = self.renderer.render(self.template, lines, s, max_w, show=self._show_flags(), hit=hit)
         except Exception:
@@ -656,7 +658,7 @@ class Overlay:
                                                  int(self.cfg["plain_height"] * mon.scale), self._plain_scroll,
                                                  show=self._show_flags(), hit=hit)
         else:
-            lines = render.Lines(c.original, c.translation, c.next, c.speaker, c.status)
+            lines = render.Lines(c.original, c.translation, c.next, c.speaker, c.status, c.tail)
             frame = self.renderer.render(self.template, lines, s, w, show=self._show_flags(), hit=hit)
         self._frame = frame
         self._sig = None

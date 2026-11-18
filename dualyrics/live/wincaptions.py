@@ -6,8 +6,10 @@ off-screen), reads the text of its caption box (UI Automation element ``Captions
 class ``LiveCaptionsDesktopWindow``) every 25 ms, and turns the growing text into captions:
 
 - the newest sentence is the text after the last sentence terminator (``. ? !`` and those of other scripts);
-- a sentence is sent on when it ends, when it has not changed for ~1.25 s, or after 3 changes (so a long
-  sentence is translated while it is still being spoken; the caption is then updated in place);
+- a sentence is sent on when it ends, when it has not changed for ~1.25 s, or after 3 changes once 1.5 s
+  passed since its start or its last partial (the gap doubles per partial), so a long sentence is translated
+  while it is still being spoken without a request per word; the caption is then updated in place;
+- Japanese and Chinese line breaks end sentences, and a full stop at the very end is believed after 0.1 s;
 - a caption box that went away (ElementNotAvailable) is looked up again; a Live Captions that was closed is
   started again; when it cannot work (old Windows, no language pack, no caption box) Live mode falls back to
   faster-whisper by itself.
@@ -175,11 +177,43 @@ def caption_language(avail: Availability, source: str) -> str:
 
 
 # ---------------------------------------------------------------- text
+SHORT_BYTES = 10             # an unfinished sentence shorter than this (UTF-8 bytes) does not count as a change
+MIN_PARTIAL_GAP = 1.5        # seconds from a sentence's start (or its last partial) to its next partial ...
+MAX_PARTIAL_GAP = 6.0        # ... doubling per partial up to this (a long sentence is not asked 7 times)
+CONFIRM = 0.1                # a full stop at the very end must stay this long (Live Captions takes some back)
+CONTINUE_FOR = 4.0           # a finished sentence that goes on within this long keeps its caption
+CJK_LINE_BYTES = 24          # a CJK caption line at least this long ends a sentence at its line break
+_CJK = re.compile(r"[぀-ヿ㐀-䶿一-鿿豈-﫿ｦ-ﾟ]")
+_SPACE_BEFORE = re.compile(r"\s+([.,!?;:…])(?=\s|$)")
+_SPACE_AROUND_CJK = re.compile(r"\s*([。！？，、])\s*")
+
+
+def _join_lines(full: str) -> str:
+    """One line of caption text. Live Captions breaks Japanese and Chinese into lines without a full stop:
+    a long CJK line ends a sentence (``。``), a short one is joined without a space; other scripts get a
+    space (the idea of LiveCaptions-Translator's ``ReplaceNewlines``, written here)."""
+    lines = [ln.strip() for ln in (full or "").replace("\r", "\n").split("\n")]
+    lines = [ln for ln in lines if ln]
+    out = ""
+    for i, ln in enumerate(lines):
+        out += ln
+        if i == len(lines) - 1:
+            break
+        last = ln[-1]
+        if _CJK.match(last) and _CJK.match(lines[i + 1][:1]):
+            if len(ln.encode("utf-8")) >= CJK_LINE_BYTES:
+                out += "。"
+        else:
+            out += " "
+    text = " ".join(out.split())
+    text = _SPACE_BEFORE.sub(r"\1", text)
+    return _SPACE_AROUND_CJK.sub(r"\1", text)
+
+
 def sentences(full: str) -> list[tuple[str, bool]]:
     """(sentence, complete) for the caption box text, oldest first; only the last one can be incomplete."""
-    text = " ".join((full or "").replace("\r", " ").replace("\n", " ").split())
     out = []
-    for s in split_sentences(text, merge_short=False):
+    for s in split_sentences(_join_lines(full), merge_short=False):
         out.append((s, s.rstrip(_QUOTES)[-1:] in TERMINATORS if s else False))
     return out
 
@@ -199,6 +233,12 @@ def same_sentence(a: str, b: str) -> bool:
     return wa[:k] == wb[:k]
 
 
+def continues(done: str, text: str) -> bool:
+    """``text`` is the finished sentence ``done`` going on (Live Captions took its full stop back)."""
+    d, t = normalize(done), normalize(text)
+    return bool(d) and len(t) > len(d) and t.startswith(d + " ")
+
+
 @dataclass
 class Emit:
     text: str
@@ -209,10 +249,19 @@ class Emit:
 
 @dataclass
 class SentenceTracker:
-    """Turns successive caption-box texts into sentence events (see the module docstring)."""
+    """Turns successive caption-box texts into sentence events (see the module docstring).
+
+    Partials (unfinished sentences sent for translation) are rationed: a change counts only from
+    ``SHORT_BYTES`` on, and a sentence gets its next partial no sooner than ``min_gap`` after its start or its
+    previous partial, the gap doubling each time (a sentence that stopped changing is still sent at once). A
+    full stop at the very end is believed only after ``confirm`` seconds; a finished sentence that goes on
+    keeps its key, so its caption is updated in place.
+    """
 
     idle: float = IDLE_EMIT
     max_changes: int = MAX_CHANGES
+    min_gap: float = MIN_PARTIAL_GAP
+    confirm: float = CONFIRM
     primed: bool = False
     cur: str = ""
     cur_key: int = 0
@@ -220,7 +269,12 @@ class SentenceTracker:
     changed_at: float = 0.0
     changes: int = 0
     emitted: str = ""
+    partial_at: float = 0.0
+    partials: int = 0
     last_done: tuple[str, int] = ("", 0)
+    done_at: float = 0.0
+    done_start: float = 0.0
+    term: tuple[str, float] = ("", 0.0)
     done: deque = field(default_factory=lambda: deque(maxlen=40))
     _next: int = 1
 
@@ -228,11 +282,34 @@ class SentenceTracker:
         """Forget the current sentence; text already in the box is not sent again (after a pause or restart)."""
         self.primed = False
         self.cur, self.cur_key, self.changes, self.emitted = "", 0, 0, ""
+        self.last_done, self.term = ("", 0), ("", 0.0)
 
     def _key(self) -> int:
         k = self._next
         self._next += 1
         return k
+
+    def _finish(self, s: str, n: str, now: float, out: list[Emit]) -> None:
+        if self.cur and same_sentence(self.cur, s):
+            out.append(Emit(s, True, self.cur_key, self.started_at))
+            self.last_done, self.done_start = (n, self.cur_key), self.started_at
+            self.cur, self.cur_key, self.changes, self.emitted = "", 0, 0, ""
+        elif self.last_done[1] and same_sentence(self.last_done[0], s):
+            out.append(Emit(s, True, self.last_done[1], now))      # the finished sentence corrected
+            self.last_done = (n, self.last_done[1])
+        else:
+            key = self._key()
+            out.append(Emit(s, True, key, now))
+            self.last_done, self.done_start = (n, key), now
+        self.done_at = now
+
+    def _gap(self) -> float:
+        return min(MAX_PARTIAL_GAP, self.min_gap * (2 ** self.partials))
+
+    def _partial(self, last: str, out: list[Emit], now: float) -> None:
+        out.append(Emit(last, False, self.cur_key, self.started_at))
+        self.changes, self.emitted, self.partial_at = 0, last, now
+        self.partials += 1
 
     def feed(self, full: str, now: float) -> list[Emit]:
         ss = sentences(full)
@@ -250,35 +327,36 @@ class SentenceTracker:
                 n = normalize(s)
                 if not complete or n in self.done:
                     continue
+                if idx == len(ss) - 1 and self.confirm > 0:
+                    if self.term[0] != n:
+                        self.term = (n, now)
+                    if now - self.term[1] < self.confirm:
+                        continue         # a full stop at the very end: wait, it may be taken back
                 self.done.append(n)
                 if idx < len(ss) - 2:
                     continue             # an old line revised: not shown again
-                if self.cur and same_sentence(self.cur, s):
-                    out.append(Emit(s, True, self.cur_key, self.started_at))
-                    self.last_done = (n, self.cur_key)
-                    self.cur, self.cur_key, self.changes, self.emitted = "", 0, 0, ""
-                elif self.last_done[1] and same_sentence(self.last_done[0], s):
-                    out.append(Emit(s, True, self.last_done[1], now))      # the finished sentence corrected
-                    self.last_done = (n, self.last_done[1])
-                else:
-                    key = self._key()
-                    out.append(Emit(s, True, key, now))
-                    self.last_done = (n, key)
+                self._finish(s, n, now, out)
         last, complete = ss[-1]
         if complete:
             return out
         if last != self.cur:
             if not (self.cur and same_sentence(self.cur, last)):
-                self.cur_key, self.started_at, self.changes, self.emitted = self._key(), now, 0, ""
+                if (not self.cur and self.last_done[1] and now - self.done_at <= CONTINUE_FOR
+                        and continues(self.last_done[0], last)):
+                    # "I think we." became "I think we should go": the same caption, updated in place
+                    self.cur_key, self.started_at = self.last_done[1], self.done_start
+                    self.last_done = ("", 0)
+                else:
+                    self.cur_key, self.started_at = self._key(), now
+                self.changes, self.emitted, self.partial_at, self.partials = 0, "", now, 0
             self.cur = last
-            self.changes += 1
             self.changed_at = now
-            if self.changes >= self.max_changes:
-                out.append(Emit(last, False, self.cur_key, self.started_at))
-                self.changes, self.emitted = 0, last
+            if len(last.encode("utf-8")) >= SHORT_BYTES:
+                self.changes += 1
+            if self.changes >= self.max_changes and now - self.partial_at >= self._gap():
+                self._partial(last, out, now)
         elif self.emitted != last and now - self.changed_at >= self.idle:
-            out.append(Emit(last, False, self.cur_key, self.started_at))
-            self.changes, self.emitted = 0, last
+            self._partial(last, out, now)
         return out
 
     @property

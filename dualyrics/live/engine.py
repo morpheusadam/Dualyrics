@@ -23,6 +23,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Callable
 
 from dualyrics import langs, paths
+from dualyrics.retry import Backoff, is_rate_limit
 from dualyrics.live import deps, interim, models, pivot, wincaptions
 from dualyrics.live.livetranslate import LiveTranslator
 from dualyrics.live.text import (Caption, CaptionStream, ContextWindow, LiveView, Recognition, display_duration,
@@ -42,6 +43,8 @@ ERROR_RETRY = 30.0       # seconds before a failed start (download, model, devic
 ERROR_RETRY_MAX = 600.0  # ... doubling after each failure in a row, up to this
 LIVE_CAPTIONS, WHISPER = wincaptions.LIVE_CAPTIONS, wincaptions.WHISPER
 PREVIEW_MAX_AGE = 6.0    # seconds an interim preview line stays without a newer pass
+MIN_HOLD = 0.7           # seconds a caption stays at least before a newer one replaces it (display queue)
+STALE_CAPTION = 4.0      # a caption that waited longer than this unseen is skipped when the overlay resumes
 MIN_AUDIO = 1600         # 0.1 s at 16 kHz: shorter pieces are not transcribed
 
 
@@ -86,6 +89,8 @@ class LiveEngine:
         self._seg_started = 0.0
         self._rate = 0
         self.stream = CaptionStream()
+        self._disp_id = 0                 # caption on the overlay now (display queue, _on_screen)
+        self._disp_since = 0.0
         self.context = ContextWindow(4)
         self._tx = ThreadPoolExecutor(max_workers=2, thread_name_prefix="live-tr")
         self._gen = 0
@@ -367,6 +372,7 @@ class LiveEngine:
                 runner.step(time.time())
                 if runner.working_since:
                     self._errors = 0
+                self._retry_failed(time.time())
                 time.sleep(wincaptions.POLL)
         except wincaptions.Unavailable:
             raise
@@ -384,7 +390,7 @@ class LiveEngine:
             return
         cfg = self.get_cfg()
         now = time.time()
-        r = Recognition(e.text, e.start, now, language=self._lc_lang)
+        r = Recognition(e.text, e.start, now, language=self._lc_lang, captions=True)
         if self._own_voice(r):
             return
         with self._lock:
@@ -394,6 +400,8 @@ class LiveEngine:
                 if cap is None:            # same words again (only the end of the sentence changed)
                     last.final = last.final or e.done
                     return
+                if not e.done and not cap.written:
+                    cap.final = False      # a finished sentence goes on ("I think we." -> "... we should go")
             else:
                 kind, got = self.stream.push(r, now=now)
                 if kind is None:
@@ -445,6 +453,8 @@ class LiveEngine:
                 try:
                     frames, start, end, sgen, srate = self._segq.get(timeout=0.1)
                 except queue.Empty:
+                    if not self.paused:
+                        self._retry_failed(time.time())
                     if self._interim_due:
                         self._interim_due = False
                         if not self.paused and self._interim_on:
@@ -658,20 +668,31 @@ class LiveEngine:
         if cap.pivot:
             source = "en"          # the caption is Whisper's English; the original language is only shown
 
+        # an unfinished Live Captions sentence may take a cheaper tier while Gemini is busy (the final one not)
+        extra = {"partial": True} if self.engine == LIVE_CAPTIONS and not cap.final else {}
+
         def work() -> None:
+            err: BaseException | None = None
             try:
                 out, state = self.live_tr.translate(text, cfg, ctx, source=source, where=self.where,
-                                                    title=self.title)
+                                                    title=self.title, **extra)
             except TranslationError as e:
                 log.info("live translation failed: %s", e)
-                out, state = "", "failed"
+                out, state, err = "", "failed", e
             except Exception:
                 log.exception("live translation crashed")
                 out, state = "", "failed"
             with self._lock:
                 if cap.version != version or cap.id != cid:
                     return  # merged with a newer fragment meanwhile: that version is being translated
-                if not dedupe.same_translation(cap.translation, out):   # a character or two: keep (no flicker)
+                if err is not None:              # asked again while it is on screen (_retry_failed)
+                    if cap.retry is None:
+                        cap.retry = Backoff()
+                    cap.retry.failed(time.time(), is_rate_limit(err))
+                elif cap.retry is not None and state != "failed":
+                    cap.retry.ok()
+                if (out or state != "failed") and not dedupe.same_translation(cap.translation, out):
+                    # a character or two: keep (no flicker); a failed update keeps the last translation
                     cap.translation = out
                 cap.trans_state = state
                 if out:
@@ -695,6 +716,23 @@ class LiveEngine:
             self._tr_jobs.setdefault(cid, []).append((version, fut))
             for old in [k for k in self._tr_jobs if k < cid - 20]:
                 del self._tr_jobs[old]
+
+    def _retry_failed(self, now: float) -> None:
+        """Ask again for the newest captions whose translation failed a moment ago (``dualyrics/retry.py``),
+        as long as they are still the ones on screen."""
+        cfg = self.get_cfg()
+        if not cfg["show_translation"]:
+            return
+        due: list[Caption] = []
+        with self._lock:
+            for c in list(self.stream.captions)[-2:]:
+                if c.trans_state == "failed" and c.retry is not None and c.retry.ready(now):
+                    c.retry.taken()
+                    c.trans_state = "pending"
+                    due.append(c)
+        for c in due:
+            log.info("live: translating caption %d again (attempt %d)", c.id, c.retry.attempts + 1)
+            self._translate(c, cfg)
 
     def _cancel_stale(self, cid: int) -> None:
         """A translation finished: drop its queued older versions and, with Live Captions (which sends many
@@ -793,13 +831,13 @@ class LiveEngine:
             return LiveView(status="lv_paused", visible=False)
         preview = self._preview_text(now, cfg, translation_only)
         with self._lock:
-            cap = self.stream.last
+            cap = self._on_screen(now, cfg)
             if cap is not None:
                 show_tr = cfg["show_translation"]
                 shown_tr = cap.translation if show_tr else ""
                 dur = display_duration(cap.text, shown_tr, cfg["live_reading_cps"], cfg["live_min_display"],
                                        translation_only=translation_only)
-                expire = cap.shown_at + dur
+                expire = max(cap.shown_at, self._disp_since) + dur
                 if self._speaking():
                     expire += LINGER
                 if now < expire:
@@ -818,6 +856,42 @@ class LiveEngine:
         if self.state == LISTENING and now - self.started_at < HELLO:
             return LiveView(status="lv_listening", visible=True)
         return LiveView(visible=False)
+
+    def _on_screen(self, now: float, cfg: dict[str, Any]) -> Caption | None:
+        """The caption to show (under ``self._lock``): a display queue, not simply the newest one.
+
+        Whisper often gives two or three sentences of one segment at once (and interim passes commit several),
+        and showing only the newest one flashed the others for 0.1-0.4 s: lines nobody could read. Each
+        caption now stays at least the shortest time on screen (``live_min_display``) before the next one
+        replaces it; with more waiting, that time is shared out (never under MIN_HOLD), so the overlay
+        catches up with the speaker instead of falling behind."""
+        caps = self.stream.captions
+        if not caps:
+            return None
+        ids = [c.id for c in caps]
+        if self._disp_id not in ids:
+            # the first caption, or the one shown left the history: the oldest one not shown yet
+            nxt = next((c for c in caps if c.id > self._disp_id and c.shown_at >= now - STALE_CAPTION), caps[-1])
+            self._disp_id, self._disp_since = nxt.id, now
+        i = ids.index(self._disp_id)
+        min_s = float(cfg.get("live_min_display", 1.5))
+        while i < len(caps) - 1:
+            hold = max(MIN_HOLD, min_s / (len(caps) - 1 - i))
+            elapsed = now - self._disp_since
+            if elapsed < hold:
+                break
+            if elapsed >= 2 * hold:
+                # the overlay was idle (or showed another source): start with the oldest caption that is
+                # still fresh, never with lines heard long ago
+                i = next((k for k in range(i + 1, len(caps)) if caps[k].shown_at >= now - STALE_CAPTION),
+                         len(caps) - 1)
+                self._disp_since = now
+            else:
+                i += 1
+                # in a backlog the next one starts when its turn came, a caption that came later when it came
+                self._disp_since = min(now, max(self._disp_since + hold, caps[i].shown_at))
+            self._disp_id = caps[i].id
+        return caps[i]
 
     def _speaking(self) -> bool:
         """Speech goes on (a caption then stays a little longer, so the overlay does not flicker)."""

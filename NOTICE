@@ -20,9 +20,13 @@ LiveTranslate
   Used: the speech segmentation rules of vad_processor.py (VADProcessor) and the
   interim-commit rules of main.py (_do_interim_asr, _strip_committed_overlap,
   _is_short_utterance), rewritten without numpy/torch; the idea of
-  model_manager.py (_hf_repo_complete) for checking that a download is complete.
+  model_manager.py (_hf_repo_complete) for checking that a download is complete;
+  (v2.2.1) the rules of the repetition check of translator.py (an answer of at
+  least 40 characters repeating a piece of 8 or more) and of the noise filter of
+  _process_segment (a piece of 2 s or more with 3 alphanumerics or fewer).
   In: dualyrics/live/vad.py, dualyrics/live/interim.py, dualyrics/live/engine.py,
-  dualyrics/live/models.py, dualyrics/dub/piper.py, dualyrics/live/deps.py
+  dualyrics/live/models.py, dualyrics/dub/piper.py, dualyrics/live/deps.py,
+  dualyrics/translate.py (is_looping), dualyrics/live/text.py
 
 Silero VAD
   https://github.com/snakers4/silero-vad
@@ -52,7 +56,11 @@ LiveCaptions-Translator
   Changed: a Live Captions window the user opened is left alone, window style
   and position are restored on close, one caption is updated in place, and
   Live mode falls back to Whisper by itself.
-  In: dualyrics/live/wincaptions.py, dualyrics/live/engine.py
+  (v2.2.1, behaviour re-implemented) the 10-byte minimum before a change of an
+  unfinished sentence counts (SHORT_THRESHOLD), newlines of CJK captions turned
+  into sentence ends (TextUtil ReplaceNewlines) and long captions shortened from
+  the start, preferably at a clause mark (ShortenDisplaySentence).
+  In: dualyrics/live/wincaptions.py, dualyrics/live/engine.py, dualyrics/render.py
 
 LiveCaptions-Translator-Buddy
   https://github.com/MuuCake/LiveCaptions-Translator-Buddy
@@ -96,6 +104,23 @@ dota-live-translator
   fallback to system loopback.
   In: dualyrics/live/procloop.py, dualyrics/live/capture.py
 
+OverTranslate
+  https://github.com/Hon-Lu/OverTranslate
+  MIT License, Copyright (c) 2026 Hon-Lu
+  Used (v2.2.1, rules re-implemented, no source text copied): the retry
+  schedule of Services/Realtime/RealtimeRetryBackoff (1 s, 2 s, then 4 s, a few
+  attempts while the line is still shown, reset on success).
+  In: dualyrics/retry.py, dualyrics/screen/engine.py, dualyrics/live/engine.py
+
+Mimi
+  https://github.com/yuxino/Mimi
+  MIT License, Copyright (c) 2026 yuxino
+  Used (v2.2.1, rules re-implemented, no source text copied): the translation
+  policy of shared/mimi-core/src/translation_policy.rs: a deadline of about
+  5 s for one live line before the next provider, and a longer back-off
+  (4 s, then 8 s) after a rate limit.
+  In: dualyrics/translate.py, dualyrics/live/livetranslate.py, dualyrics/retry.py
+
 Windows classic samples (ApplicationLoopback)
   https://github.com/microsoft/Windows-classic-samples
   MIT License, Copyright (c) Microsoft Corporation
@@ -131,5 +156,9 @@ packages. Each comes with, and keeps, its own licence.
 ----------------------------
 
 ufal/whisper_streaming, collabora/WhisperLive, QuentinFuxa/WhisperLiveKit,
-KoljaB/RealtimeSTT (real-time Whisper pipelines) and yuxino/Mimi (per-process
-capture for captions).
+KoljaB/RealtimeSTT (real-time Whisper pipelines; v2.2.1: confirming a full stop
+over a few polls before a sentence counts as finished) and yuxino/Mimi
+(per-process capture for captions). From GPL projects only ideas, written from
+scratch (v2.2.1): requests-per-minute pacing per key (HIllya51/LunaTranslator)
+and lyrics search hits scored by title and artist similarity
+(jayfunc/BetterLyrics).

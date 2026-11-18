@@ -549,7 +549,8 @@ class Controller:
         out["profile"] = {"id": prof.get("id", ""), "name": self._profile_name(prof), "matched_by": app.match.via}
         out["effective"] = {k: cfg[k] for k in ("target_language", "template", "translation_only", "click_through",
                                                 "position_preset", "dub_enabled")}
-        tr = app.media.track
+        # the watcher keeps the last track after its player closed (no media session left): nothing plays then
+        tr = app.media.track if getattr(app.media, "has_session", True) else None
         out["now_playing"] = None if tr is None else {
             "title": tr.title, "artist": tr.artist, "album": tr.album, "player": tr.app,
             "playing": bool(app.media.playing), "position_s": round(float(app.media.clock.position()), 1),

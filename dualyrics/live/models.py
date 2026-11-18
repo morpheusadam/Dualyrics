@@ -13,6 +13,7 @@ import logging
 import os
 import re
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -152,6 +153,49 @@ def _verify(path: Path, f: RemoteFile) -> str:
     return ""
 
 
+RETRIES = 6                 # attempts per file; a broken transfer resumes where it stopped (HTTP Range)
+RETRY_PAUSE, RETRY_PAUSE_MAX = 2.0, 30.0
+_sleep: Callable[[float], None] = time.sleep
+
+
+def _wait(seconds: float, cancelled: Callable[[], bool]) -> None:
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        if cancelled():
+            raise DownloadCancelled()
+        _sleep(min(0.25, max(0.0, end - time.monotonic())))
+
+
+def _fetch_once(session: Any, url: str, part: Path, f: RemoteFile, done: int, total: int,
+                progress: Callable[[int, int], None], cancelled: Callable[[], bool]) -> None:
+    """One request for one file, appended to ``part`` (continued with a Range request)."""
+    have = part.stat().st_size if part.exists() else 0
+    if f.size and have > f.size:          # cannot be resumed: start this file again
+        part.unlink()
+        have = 0
+    headers = {"Range": f"bytes={have}-"} if have else {}
+    with session.get(url, headers=headers, stream=True, timeout=net.TIMEOUT_SLOW, allow_redirects=True) as r:
+        if r.status_code == 416:          # already complete (checked by the caller)
+            if not part.exists():
+                raise OSError(f"{f.name}: nothing was downloaded")
+            return
+        r.raise_for_status()
+        if have and r.status_code != 206:  # server ignored the range: start over
+            have = 0
+        with open(part, "ab" if have else "wb") as fh:
+            done_file = have
+            progress(done + done_file, total)
+            for chunk in r.iter_content(CHUNK):
+                if cancelled():
+                    raise DownloadCancelled()
+                if chunk:
+                    fh.write(chunk)
+                    done_file += len(chunk)
+                    progress(done + done_file, total)
+    if not part.exists():
+        raise OSError(f"{f.name}: nothing was downloaded")
+
+
 def download(name: str, session: Any, progress: Callable[[int, int], None] = lambda done, total: None,
              cancelled: Callable[[], bool] = lambda: False) -> Path:
     """Download model ``name`` (resumable, checked against the Hub's sizes and checksums). Calls
@@ -176,7 +220,17 @@ def _download_locked(info: ModelInfo, session: Any, progress: Callable[[int, int
     if is_installed(name):
         return dest
     dest.mkdir(parents=True, exist_ok=True)
-    files = _file_list(session, info)
+    pause = RETRY_PAUSE
+    for attempt in range(RETRIES):
+        try:
+            files = _file_list(session, info)
+            break
+        except Exception as e:  # noqa: BLE001 - only network errors leave _file_list
+            if attempt == RETRIES - 1:
+                raise
+            log.info("model %s: file list: %s (attempt %d)", name, e, attempt + 1)
+            _wait(pause, cancelled)
+            pause = min(RETRY_PAUSE_MAX, pause * 2)
     total = sum(f.size for f in files) or info.size_mb * 1024 * 1024
     done = 0
     for f in files:
@@ -189,36 +243,30 @@ def _download_locked(info: ModelInfo, session: Any, progress: Callable[[int, int
                 continue
             target.unlink()
         part = target.with_name(target.name + ".part")
-        have = part.stat().st_size if part.exists() else 0
-        if f.size and have > f.size:      # cannot be resumed: start this file again
-            part.unlink()
-            have = 0
-        headers = {"Range": f"bytes={have}-"} if have else {}
         url = f"{HF}/{info.repo}/resolve/main/{fname}"
-        with session.get(url, headers=headers, stream=True, timeout=net.TIMEOUT_SLOW, allow_redirects=True) as r:
-            if r.status_code == 416:          # already complete (checked below)
-                have = part.stat().st_size if part.exists() else 0
+        pause = RETRY_PAUSE
+        for attempt in range(RETRIES):
+            try:
+                _fetch_once(session, url, part, f, done, total, progress, cancelled)
+                problem = _verify(part, f)
+            except DownloadCancelled:
+                raise
+            except Exception as e:  # noqa: BLE001
+                if not net.is_network_error(e) or attempt == RETRIES - 1:
+                    raise
+                log.info("model %s: %s: %s (attempt %d, resuming)", name, fname, e, attempt + 1)
             else:
-                r.raise_for_status()
-                if have and r.status_code != 206:  # server ignored the range: start over
-                    have = 0
-                with open(part, "ab" if have else "wb") as fh:
-                    done_file = have
-                    progress(done + done_file, total)
-                    for chunk in r.iter_content(CHUNK):
-                        if cancelled():
-                            raise DownloadCancelled()
-                        if chunk:
-                            fh.write(chunk)
-                            done_file += len(chunk)
-                            progress(done + done_file, total)
-        if not part.exists():
-            raise OSError(f"{fname}: nothing was downloaded")
-        problem = _verify(part, f)
-        if problem:
-            if not (f.size and part.stat().st_size < f.size):
-                part.unlink()   # complete but wrong: never resume onto it; a short file resumes next time
-            raise OSError(problem)
+                if not problem:
+                    break
+                short = bool(f.size) and part.exists() and part.stat().st_size < f.size
+                if not short:
+                    part.unlink(missing_ok=True)   # complete but wrong: never resume onto it
+                    raise OSError(problem)
+                if attempt == RETRIES - 1:
+                    raise OSError(problem)        # a short file resumes next time
+                log.info("model %s: %s (attempt %d, resuming)", name, problem, attempt + 1)
+            _wait(pause, cancelled)               # a flaky connection or proxy: resume after a pause
+            pause = min(RETRY_PAUSE_MAX, pause * 2)
         os.replace(part, target)
         done += target.stat().st_size
     sizes = {f.name: (dest / f.name).stat().st_size for f in files}

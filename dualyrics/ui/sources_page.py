@@ -20,9 +20,14 @@ if TYPE_CHECKING:
 ICONS = {"lyrics": "lyrics", "screen": "monitors", "audio": "live"}
 
 
+_OCR_LANGS: list[tuple[str, str]] = []     # asked once per run (the WinRT import and query take a while)
+
+
 def _ocr_languages() -> list[tuple[str, str]]:
     """Installed Windows OCR languages, asked on a short-lived thread (WinRT sets up its apartment there,
-    not on the Tk thread)."""
+    not on the Tk thread) and remembered for the rest of the run."""
+    if _OCR_LANGS:
+        return list(_OCR_LANGS)
     out: list[tuple[str, str]] = []
 
     def work() -> None:
@@ -36,6 +41,8 @@ def _ocr_languages() -> list[tuple[str, str]]:
     th = threading.Thread(target=work, daemon=True)
     th.start()
     th.join(3.0)
+    if not th.is_alive() and out:
+        _OCR_LANGS[:] = out
     return list(out)
 
 

@@ -41,6 +41,23 @@ collabora/WhisperLive, QuentinFuxa/WhisperLiveKit and KoljaB/RealtimeSTT (real-t
 
 Ideas only: yuxino/Mimi (MIT; per-process capture for captions).
 
+## v2.2.1 Fixes from the reverse-engineering review
+
+Rules re-implemented from the behaviour of the upstream code (no source text copied); see
+[`REVERSE_ENGINEERING.md`](REVERSE_ENGINEERING.md) for the comparison.
+
+| Project | Licence | Upstream file(s) | What was taken | Dualyrics file(s) |
+|---|---|---|---|---|
+| [SakiRinn/LiveCaptions-Translator](https://github.com/SakiRinn/LiveCaptions-Translator) | Apache-2.0 (Copyright 2024 SakiRinn and other contributors) | `src/Translator.cs` (`SHORT_THRESHOLD`), `src/utils/TextUtil.cs` (`ReplaceNewlines`, `ShortenDisplaySentence`) | A change of an unfinished sentence counts only from 10 UTF-8 bytes; a newline after a long CJK caption line ends a sentence (`。`), a short one is joined; a too-long caption drops lines from its start and begins with `…`, preferably after a clause mark. Changed: partials are also rationed in time (1.5 s, doubling), a byte threshold of 24 for CJK lines. | `dualyrics/live/wincaptions.py`, `dualyrics/render.py` (`_wrap(keep="tail")`) |
+| [TheDeathDragon/LiveTranslate](https://github.com/TheDeathDragon/LiveTranslate) | MIT | `translator.py` (degenerate-output check), `main.py` (`_process_segment`) | An answer of 40 characters or more that repeats a piece of 8 or more is a bad answer; a piece of 2 s or more with 3 alphanumerics or fewer is noise. Changed: CJK text and Live Captions text are never called noise. | `dualyrics/translate.py` (`is_looping`), `dualyrics/live/livetranslate.py`, `dualyrics/live/text.py` |
+| [Hon-Lu/OverTranslate](https://github.com/Hon-Lu/OverTranslate) | MIT (Copyright (c) 2026 Hon-Lu) | `Services/Realtime/RealtimeRetryBackoff` | Retry of a failed line while it is shown: after 1 s, 2 s (then 4 s), at most 3 attempts, reset on success. Changed: a 45 s window. | `dualyrics/retry.py`, `dualyrics/screen/engine.py`, `dualyrics/live/engine.py` |
+| [yuxino/Mimi](https://github.com/yuxino/Mimi) | MIT (Copyright (c) 2026 yuxino) | `shared/mimi-core/src/translation_policy.rs` | About 5 s for one live line before the next tier (Mimi: 4.5 s); 4 s then 8 s after a rate limit. | `dualyrics/translate.py` (`LIVE_DEADLINE`), `dualyrics/retry.py` |
+
+Ideas only: KoljaB/RealtimeSTT (Apache-2.0; a full stop confirmed over a few polls), HIllya51/LunaTranslator
+(GPL-3.0; requests-per-minute pacing per key, written from scratch in `dualyrics/keypool.py`) and
+jayfunc/BetterLyrics (GPL-3.0; search hits scored by title and artist similarity, written from scratch in
+`dualyrics/lyrics.py`).
+
 ## Earlier versions
 
 Credited in the README (Credits): LRCLIB, faster-whisper and the SYSTRAN Whisper conversions, PyAudioWPatch,

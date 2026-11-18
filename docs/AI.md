@@ -125,7 +125,7 @@ Every tool takes a JSON object. Invalid arguments and refused changes come back 
 The control API is plain JSON over HTTP, so a script can use it without MCP. Read `%APPDATA%\Dualyrics\api.json`:
 
 ```json
-{ "app": "Dualyrics", "version": "2.2.0", "running": true, "token": "…", "url": "http://127.0.0.1:52817", "port": 52817, "pid": 1234 }
+{ "app": "Dualyrics", "version": "2.2.1", "running": true, "token": "…", "url": "http://127.0.0.1:52817", "port": 52817, "pid": 1234 }
 ```
 
 - `GET /v1/tools` lists the tools with their JSON Schemas.
